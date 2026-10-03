@@ -11,7 +11,8 @@ import {
   XCircle,
   BookOpen,
   ArrowRight,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 
 interface ReviewChallengeModalProps {
@@ -31,7 +32,7 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [decision, setDecision] = useState<'recommend_accept' | 'recommend_reject'>('recommend_accept');
+  const [decision, setDecision] = useState<'recommend_accept' | 'recommend_reject' | 'recommend_skip_question'>('recommend_accept');
   const [recommendedMarks, setRecommendedMarks] = useState<number>(challenge?.originalMarksAwarded ?? 0);
   const [reviewNotes, setReviewNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -42,7 +43,11 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
     if (challenge) {
       setRecommendedMarks(challenge.originalMarksAwarded);
       setReviewNotes('');
-      setDecision('recommend_accept');
+      if (challenge.setterDecision === 'recommend_skip_question') {
+        setDecision('recommend_skip_question');
+      } else {
+        setDecision('recommend_accept');
+      }
     }
   }, [challenge]);
 
@@ -72,6 +77,18 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
         evaluatorRecommendedMarks: decision === 'recommend_accept' ? Number(recommendedMarks) : challenge.originalMarksAwarded,
         evaluatorReviewNotes: reviewNotes.trim(),
       });
+
+      // If evaluator recommends skipping the question, also lodge a recommendation on the exam question
+      if (decision === 'recommend_skip_question') {
+        await examService.recommendSkipQuestion(
+          challenge.examId,
+          challenge.questionId,
+          evaluatorId,
+          evaluatorName,
+          'evaluator',
+          reviewNotes.trim()
+        );
+      }
 
       onSuccess();
       onClose();
@@ -138,41 +155,65 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
             {/* Candidate Submitted Response */}
             <div>
               <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">
-                Candidate's Answer:
+                Candidate's Submitted Answer:
               </span>
-              <div className="font-mono text-[11px] p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
-                {challenge.candidateAnswer}
+              <div className="font-mono text-[11px] p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-750 text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
+                {challenge.candidateAnswer || <span className="italic text-slate-400">Unattempted</span>}
               </div>
             </div>
 
-            {/* Candidate Challenge Argument */}
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-bold text-amber-900 dark:text-amber-300">
-                <span>Candidate Appeal Reason: {challenge.challengeReason}</span>
+            {/* Candidate Justification */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Candidate's Stated Argument:</span>
+                <span className="text-[10px] text-amber-600 font-bold uppercase">{challenge.challengeReason.replace(/_/g, ' ')}</span>
               </div>
-              <p className="text-slate-800 dark:text-slate-200 text-xs">
+              <div className="p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 text-slate-800 dark:text-slate-200 italic leading-relaxed">
                 "{challenge.candidateExplanation}"
-              </p>
+              </div>
               {challenge.supportingReference && (
-                <div className="flex items-center space-x-1 text-[11px] text-amber-800 dark:text-amber-400 pt-1">
-                  <BookOpen className="w-3 h-3 shrink-0" />
-                  <span className="font-semibold">Reference:</span>
-                  <span>{challenge.supportingReference}</span>
+                <div className="text-[11px] text-slate-500 pt-0.5">
+                  <strong>Academic Citation:</strong> {challenge.supportingReference}
                 </div>
               )}
             </div>
+
+            {/* Paper Setter Recommendation (if reviewed) */}
+            {challenge.setterReviewedAt && (
+              <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-1 text-xs">
+                <div className="flex items-center justify-between text-indigo-900 dark:text-indigo-200">
+                  <span className="font-bold flex items-center space-x-1">
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Paper Setter Recommendation ({challenge.setterName || 'Setter'}):</span>
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+                    {challenge.setterDecision?.replace(/_/g, ' ')}
+                  </span>
+                </div>
+                {challenge.setterProposedAnswer && (
+                  <div className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
+                    Setter Proposed Answer Key: "{challenge.setterProposedAnswer}"
+                  </div>
+                )}
+                {challenge.setterReviewNotes && (
+                  <p className="text-slate-700 dark:text-slate-300 text-xs italic">
+                    "{challenge.setterReviewNotes}"
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Evaluator Decision */}
+          {/* Evaluator Recommendation Selection */}
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-              Evaluator's Academic Recommendation <span className="text-rose-500">*</span>
+              Evaluator Recommendation to Administrator <span className="text-rose-500">*</span>
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <button
                 type="button"
                 onClick={() => setDecision('recommend_accept')}
-                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all ${
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-2.5 transition-all cursor-pointer ${
                   decision === 'recommend_accept'
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-2 ring-emerald-500/20'
                     : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -180,15 +221,15 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
               >
                 <CheckCircle2 className={`w-5 h-5 shrink-0 ${decision === 'recommend_accept' ? 'text-emerald-600' : 'text-slate-400'}`} />
                 <div>
-                  <span className="font-bold block">Recommend Score Revision</span>
-                  <span className="text-[11px] opacity-80">Candidate's challenge is academically valid; revise awarded marks.</span>
+                  <span className="font-bold block">Recommend Mark Revision</span>
+                  <span className="text-[10px] opacity-80">Recommend revising score for this candidate.</span>
                 </div>
               </button>
 
               <button
                 type="button"
                 onClick={() => setDecision('recommend_reject')}
-                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all ${
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-2.5 transition-all cursor-pointer ${
                   decision === 'recommend_reject'
                     ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/30 text-rose-950 dark:text-rose-100 ring-2 ring-rose-500/20'
                     : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -196,14 +237,30 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
               >
                 <XCircle className={`w-5 h-5 shrink-0 ${decision === 'recommend_reject' ? 'text-rose-600' : 'text-slate-400'}`} />
                 <div>
-                  <span className="font-bold block">Recommend Upholding Mark</span>
-                  <span className="text-[11px] opacity-80">Original evaluation is sound; challenge is not supported.</span>
+                  <span className="font-bold block">Uphold Original Mark</span>
+                  <span className="text-[10px] opacity-80">Recommend upholding the original evaluation score.</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDecision('recommend_skip_question')}
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-2.5 transition-all cursor-pointer ${
+                  decision === 'recommend_skip_question'
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-amber-950 dark:text-amber-100 ring-2 ring-amber-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                <AlertTriangle className={`w-5 h-5 shrink-0 ${decision === 'recommend_skip_question' ? 'text-amber-600' : 'text-slate-400'}`} />
+                <div>
+                  <span className="font-bold block">Recommend Question Skip</span>
+                  <span className="text-[10px] opacity-80">Debatable question: recommend admin skip for all candidates.</span>
                 </div>
               </button>
             </div>
           </div>
 
-          {/* If recommending score revision, select revised marks */}
+          {/* Conditional Input for Recommended Marks */}
           {decision === 'recommend_accept' && (
             <div className="space-y-1.5 p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60">
               <label className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
@@ -222,38 +279,40 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
                 />
                 <span className="text-xs text-emerald-800 dark:text-emerald-300">
                   {recommendedMarks > challenge.originalMarksAwarded
-                    ? `+${(recommendedMarks - challenge.originalMarksAwarded).toFixed(1)} points increase suggested`
-                    : recommendedMarks < challenge.originalMarksAwarded
-                    ? `${(recommendedMarks - challenge.originalMarksAwarded).toFixed(1)} points adjustment`
-                    : 'Same as original'}
+                    ? `+${(recommendedMarks - challenge.originalMarksAwarded).toFixed(1)} points proposed addition`
+                    : 'Score adjustment proposed'}
                 </span>
               </div>
             </div>
           )}
 
-          {/* Evaluator Review Remarks */}
+          {decision === 'recommend_skip_question' && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+              <span className="font-bold flex items-center space-x-1">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>Question Debatability Policy:</span>
+              </span>
+              <p className="text-[11px] leading-relaxed">
+                If approved by the Administrator, this question will be marked as debatable, full marks ({challenge.questionMarks} Pts) will be credited to all candidates, and scores will be rounded off to the next nearest integer.
+              </p>
+            </div>
+          )}
+
+          {/* Review Notes */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-              Evaluator's Remarks for Administrator <span className="text-rose-500">*</span>
+              Evaluator Subject-Matter Remarks for Administrator <span className="text-rose-500">*</span>
             </label>
             <textarea
               rows={3}
               value={reviewNotes}
               onChange={(e) => setReviewNotes(e.target.value)}
-              placeholder="Explain the academic rationale for accepting or upholding the original score..."
+              placeholder="State your technical evaluation, reason for recommended adjustment or question skip..."
               className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
             />
           </div>
 
-          {/* Info on next chain of events */}
-          <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 text-xs text-purple-900 dark:text-purple-300 flex items-center space-x-2">
-            <ShieldCheck className="w-4 h-4 text-purple-600 shrink-0" />
-            <span>
-              On submission, this recommendation will be forwarded to the Institutional Administrator for formal authorization.
-            </span>
-          </div>
-
-          {/* Buttons */}
+          {/* Action Buttons */}
           <div className="pt-2 flex items-center justify-end space-x-3">
             <button
               type="button"
@@ -265,10 +324,10 @@ export const ReviewChallengeModal: React.FC<ReviewChallengeModalProps> = ({
             <button
               type="submit"
               disabled={submitting}
-              className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md shadow-purple-900/20 transition-all disabled:opacity-50"
+              className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md shadow-purple-900/20 transition-all disabled:opacity-50 cursor-pointer"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{submitting ? 'Forwarding...' : 'Forward Recommendation to Administrator'}</span>
+              <span>{submitting ? 'Submitting Review...' : 'Forward to Administrator'}</span>
             </button>
           </div>
         </form>

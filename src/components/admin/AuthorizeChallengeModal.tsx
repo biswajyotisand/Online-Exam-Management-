@@ -11,7 +11,10 @@ import {
   BookOpen,
   UserCheck,
   Check,
-  FileCheck
+  FileCheck,
+  AlertTriangle,
+  RotateCcw,
+  Users
 } from 'lucide-react';
 
 interface AuthorizeChallengeModalProps {
@@ -31,8 +34,11 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
   onClose,
   onSuccess,
 }) => {
-  const [decision, setDecision] = useState<'accept_revision' | 'uphold_original'>('accept_revision');
+  const [decision, setDecision] = useState<
+    'accept_revision' | 'uphold_original' | 'alter_key_all' | 'approve_skip_all'
+  >('accept_revision');
   const [finalMarks, setFinalMarks] = useState<number>(0);
+  const [newCorrectAnswer, setNewCorrectAnswer] = useState<string>('');
   const [adminNotes, setAdminNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,14 +46,31 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
   useEffect(() => {
     if (challenge) {
       const isRecommendAccept = challenge.evaluatorDecision === 'recommend_accept';
-      setDecision(isRecommendAccept ? 'accept_revision' : 'uphold_original');
+      const isRecommendSkip = challenge.setterDecision === 'recommend_skip_question' || challenge.evaluatorDecision === 'recommend_skip_question';
+      const isRecommendAlterKey = challenge.setterDecision === 'recommend_alter_key';
+
+      if (isRecommendSkip) {
+        setDecision('approve_skip_all');
+      } else if (isRecommendAlterKey) {
+        setDecision('alter_key_all');
+        setNewCorrectAnswer(challenge.setterProposedAnswer || '');
+      } else if (isRecommendAccept) {
+        setDecision('accept_revision');
+      } else {
+        setDecision('uphold_original');
+      }
+
       setFinalMarks(
         challenge.evaluatorRecommendedMarks !== undefined
           ? challenge.evaluatorRecommendedMarks
           : challenge.originalMarksAwarded
       );
       setAdminNotes(
-        isRecommendAccept
+        isRecommendSkip
+          ? 'Approved skipping debatable question following academic board recommendation. Total marks and passing marks decreased proportionately across the exam.'
+          : isRecommendAlterKey
+          ? `Altered answer key to "${challenge.setterProposedAnswer || 'revised option'}" following Paper Setter review. Re-scored across all candidates.`
+          : isRecommendAccept
           ? `Authorized based on evaluator recommendation (${challenge.evaluatorName || 'Academic Evaluator'}).`
           : 'Original score upheld following academic review.'
       );
@@ -63,23 +86,66 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
       return;
     }
 
-    if (decision === 'accept_revision') {
-      if (finalMarks < 0 || finalMarks > challenge.questionMarks) {
-        setError(`Final marks must be between 0 and ${challenge.questionMarks}.`);
-        return;
-      }
-    }
-
     setSubmitting(true);
     setError(null);
     try {
-      await examService.adminResolveChallenge(challenge.id, {
-        adminId,
-        adminName,
-        decision,
-        finalAwardedMarks: decision === 'accept_revision' ? Number(finalMarks) : challenge.originalMarksAwarded,
-        adminNotes: adminNotes.trim(),
-      });
+      if (decision === 'alter_key_all') {
+        if (!newCorrectAnswer.trim()) {
+          setError('Please specify the new correct answer key to re-score all candidates.');
+          setSubmitting(false);
+          return;
+        }
+
+        // Alter answer key across all candidates (excluding descriptive answers)
+        const res = await examService.alterAnswerKeyAndReScoreAll(
+          challenge.examId,
+          challenge.questionId,
+          newCorrectAnswer.trim(),
+          adminId,
+          adminName,
+          adminNotes.trim()
+        );
+
+        // Also mark this challenge ticket as resolved
+        await examService.adminResolveChallenge(challenge.id, {
+          adminId,
+          adminName,
+          decision: 'accept_revision',
+          finalAwardedMarks: challenge.questionMarks,
+          adminNotes: `[Answer Key Altered]: ${adminNotes.trim()} (${res.affectedCount} candidates who attempted re-scored: ${res.increasedCount} increased, ${res.decreasedCount} decreased, ${res.unattemptedCount} unattempted kept at 0).`,
+        });
+
+        alert(`Answer key updated to "${newCorrectAnswer.trim()}". Out of ${res.affectedCount + res.unattemptedCount} candidates, ${res.affectedCount} who attempted this question had marks updated (${res.increasedCount} increased, ${res.decreasedCount} decreased, and ${res.unattemptedCount} unattempted remained at 0 marks)!`);
+      } else if (decision === 'approve_skip_all') {
+        // Approve skip of question for all candidates
+        const res = await examService.approveSkipQuestionAndReScoreAll(
+          challenge.examId,
+          challenge.questionId,
+          adminId,
+          adminName,
+          adminNotes.trim()
+        );
+
+        // Mark this challenge ticket as resolved
+        await examService.adminResolveChallenge(challenge.id, {
+          adminId,
+          adminName,
+          decision: 'accept_revision',
+          finalAwardedMarks: 0,
+          adminNotes: `[Debatable Question Skipped]: ${adminNotes.trim()} (Question excluded from exam scoring; exam total marks and passing marks reduced proportionately. Baseline data, marks, scorecard, and answer sheets before challenge preserved for audit).`,
+        });
+
+        alert(`Debatable question "${challenge.questionTitle}" skipped successfully!\n\n• Exam total marks decreased by ${challenge.questionMarks} points\n• Passing marks decreased proportionately\n• Evaluated candidate submissions recalculated\n• Pre-challenge scorecards, data, marks, and answer sheets preserved for Administrator audit.`);
+      } else {
+        // Standard resolution for single candidate
+        await examService.adminResolveChallenge(challenge.id, {
+          adminId,
+          adminName,
+          decision,
+          finalAwardedMarks: decision === 'accept_revision' ? Number(finalMarks) : challenge.originalMarksAwarded,
+          adminNotes: adminNotes.trim(),
+        });
+      }
 
       onSuccess();
       onClose();
@@ -105,7 +171,7 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
                 Authorize Question Challenge Resolution
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Institutional review & final scorecard revision determination
+                Institutional determination, setter review integration & global candidate re-scoring
               </p>
             </div>
           </div>
@@ -143,61 +209,90 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
               </span>
             </div>
 
-            {/* Candidate Answer */}
-            <div>
-              <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">
-                Candidate's Answer:
-              </span>
-              <div className="font-mono text-[11px] p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
-                {challenge.candidateAnswer}
+            {/* Candidate Response & Explanation */}
+            <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-750 space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Candidate Argument:</span>
+                <span className="text-[10px] text-amber-600 font-bold uppercase">{challenge.challengeReason.replace(/_/g, ' ')}</span>
               </div>
-            </div>
-
-            {/* Candidate Appeal */}
-            <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40">
-              <span className="text-[10px] uppercase font-bold text-amber-900 dark:text-amber-300 block mb-0.5">
-                Candidate Appeal ({challenge.challengeReason}):
-              </span>
-              <p className="text-slate-800 dark:text-slate-200 text-xs">
+              <p className="text-slate-800 dark:text-slate-200 italic leading-relaxed">
                 "{challenge.candidateExplanation}"
               </p>
-            </div>
-
-            {/* Evaluator's Recommendation */}
-            <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 space-y-1">
-              <div className="flex items-center justify-between text-xs font-bold text-purple-950 dark:text-purple-200">
-                <span className="flex items-center space-x-1.5">
-                  <UserCheck className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Evaluator Recommendation ({challenge.evaluatorName || 'Academic Evaluator'}):</span>
-                </span>
-                <span className={`px-2 py-0.5 rounded-md text-[10px] ${
-                  challenge.evaluatorDecision === 'recommend_accept'
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                    : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                }`}>
-                  {challenge.evaluatorDecision === 'recommend_accept'
-                    ? `Recommended: ${challenge.evaluatorRecommendedMarks} / ${challenge.questionMarks} Pts`
-                    : 'Recommended: Uphold Original'}
-                </span>
-              </div>
-              {challenge.evaluatorReviewNotes && (
-                <p className="text-slate-700 dark:text-slate-300 text-xs italic">
-                  "{challenge.evaluatorReviewNotes}"
-                </p>
+              {challenge.supportingReference && (
+                <div className="text-[11px] text-slate-500 pt-1">
+                  <strong>Academic Reference:</strong> {challenge.supportingReference}
+                </div>
               )}
             </div>
+
+            {/* Paper Setter's Recommendation Section (Since Paper Setter authored the question and selected key) */}
+            {challenge.setterReviewedAt ? (
+              <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-1 text-xs">
+                <div className="flex items-center justify-between text-indigo-900 dark:text-indigo-200">
+                  <span className="font-bold flex items-center space-x-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Paper Setter Recommendation ({challenge.setterName || 'Designated Setter'}):</span>
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+                    {challenge.setterDecision === 'recommend_alter_key'
+                      ? 'Recommend Alter Answer Key'
+                      : challenge.setterDecision === 'recommend_skip_question'
+                      ? 'Recommend Question Skip (Debatable)'
+                      : 'Uphold Original Key'}
+                  </span>
+                </div>
+                {challenge.setterProposedAnswer && (
+                  <div className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
+                    Setter Proposed Correct Key: "{challenge.setterProposedAnswer}"
+                  </div>
+                )}
+                {challenge.setterReviewNotes && (
+                  <p className="text-slate-700 dark:text-slate-300 text-xs italic">
+                    "{challenge.setterReviewNotes}"
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-400 italic">
+                Paper Setter review pending or bypassed.
+              </div>
+            )}
+
+            {/* Evaluator's Recommendation */}
+            {challenge.evaluatorReviewedAt && (
+              <div className="p-3 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 space-y-1 text-xs">
+                <div className="flex items-center justify-between text-purple-900 dark:text-purple-200">
+                  <span className="font-bold flex items-center space-x-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                    <span>Evaluator Recommendation ({challenge.evaluatorName || 'Academic Evaluator'}):</span>
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                    {challenge.evaluatorDecision === 'recommend_accept'
+                      ? `Revise to ${challenge.evaluatorRecommendedMarks} Pts`
+                      : challenge.evaluatorDecision === 'recommend_skip_question'
+                      ? 'Recommend Question Skip'
+                      : 'Uphold Original'}
+                  </span>
+                </div>
+                {challenge.evaluatorReviewNotes && (
+                  <p className="text-slate-700 dark:text-slate-300 text-xs italic">
+                    "{challenge.evaluatorReviewNotes}"
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Admin Decision Options */}
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-              Administrator Final Determination <span className="text-rose-500">*</span>
+              Administrator Final Determination & Scope <span className="text-rose-500">*</span>
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <button
                 type="button"
                 onClick={() => setDecision('accept_revision')}
-                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all ${
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all cursor-pointer ${
                   decision === 'accept_revision'
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-2 ring-emerald-500/20'
                     : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -205,15 +300,15 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
               >
                 <CheckCircle2 className={`w-5 h-5 shrink-0 ${decision === 'accept_revision' ? 'text-emerald-600' : 'text-slate-400'}`} />
                 <div>
-                  <span className="font-bold block">Authorize Score Revision</span>
-                  <span className="text-[11px] opacity-80">Approve score adjustment and immediately update candidate scorecard.</span>
+                  <span className="font-bold block">1. Revise Marks (Candidate Only)</span>
+                  <span className="text-[11px] opacity-80">Approve score adjustment for this specific candidate appeal.</span>
                 </div>
               </button>
 
               <button
                 type="button"
                 onClick={() => setDecision('uphold_original')}
-                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all ${
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all cursor-pointer ${
                   decision === 'uphold_original'
                     ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/30 text-rose-950 dark:text-rose-100 ring-2 ring-rose-500/20'
                     : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -221,18 +316,50 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
               >
                 <XCircle className={`w-5 h-5 shrink-0 ${decision === 'uphold_original' ? 'text-rose-600' : 'text-slate-400'}`} />
                 <div>
-                  <span className="font-bold block">Uphold Original Score</span>
+                  <span className="font-bold block">2. Uphold Original Score</span>
                   <span className="text-[11px] opacity-80">Dismiss challenge appeal and maintain existing evaluation mark.</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDecision('alter_key_all')}
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all cursor-pointer ${
+                  decision === 'alter_key_all'
+                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-950 dark:text-indigo-100 ring-2 ring-indigo-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                <Users className={`w-5 h-5 shrink-0 ${decision === 'alter_key_all' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                <div>
+                  <span className="font-bold block">3. Alter Answer Key (Attempted Candidates)</span>
+                  <span className="text-[11px] opacity-80">Modify key: numbers increased/decreased strictly for candidates who attempted the question.</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDecision('approve_skip_all')}
+                className={`p-3.5 rounded-2xl border text-left flex items-start space-x-3 transition-all cursor-pointer ${
+                  decision === 'approve_skip_all'
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-amber-950 dark:text-amber-100 ring-2 ring-amber-500/20'
+                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                <AlertTriangle className={`w-5 h-5 shrink-0 ${decision === 'approve_skip_all' ? 'text-amber-600' : 'text-slate-400'}`} />
+                <div>
+                  <span className="font-bold block">4. Skip Debatable Question</span>
+                  <span className="text-[11px] opacity-80">Decreases exam total marks and proportionately lowers passing marks; all candidates re-evaluated without question; pre-challenge baseline preserved.</span>
                 </div>
               </button>
             </div>
           </div>
 
-          {/* If Authorizing Revision: Final Awarded Marks */}
+          {/* Conditional Input based on decision */}
           {decision === 'accept_revision' && (
             <div className="space-y-1.5 p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60">
               <label className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center justify-between">
-                <span>Final Authorized Marks (Max: {challenge.questionMarks} Pts)</span>
+                <span>Final Authorized Marks for Candidate (Max: {challenge.questionMarks} Pts)</span>
                 <span className="text-[11px] font-normal">Original: {challenge.originalMarksAwarded} Pts</span>
               </label>
               <div className="flex items-center space-x-3">
@@ -247,12 +374,40 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
                 />
                 <span className="text-xs text-emerald-800 dark:text-emerald-300">
                   {finalMarks > challenge.originalMarksAwarded
-                    ? `+${(finalMarks - challenge.originalMarksAwarded).toFixed(1)} points will be added to total score`
-                    : finalMarks < challenge.originalMarksAwarded
-                    ? `${(finalMarks - challenge.originalMarksAwarded).toFixed(1)} points adjustment`
-                    : 'No net mark change'}
+                    ? `+${(finalMarks - challenge.originalMarksAwarded).toFixed(1)} points added to candidate scorecard`
+                    : 'Adjustment applied to candidate'}
                 </span>
               </div>
+            </div>
+          )}
+
+          {decision === 'alter_key_all' && (
+            <div className="space-y-2 p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/60">
+              <label className="text-xs font-bold text-indigo-900 dark:text-indigo-200">
+                New Correct Answer Key (Will re-score all candidate objective submissions):
+              </label>
+              <input
+                type="text"
+                value={newCorrectAnswer}
+                onChange={(e) => setNewCorrectAnswer(e.target.value)}
+                placeholder="e.g. Option B"
+                className="w-full text-xs font-semibold px-3.5 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="text-[11px] text-indigo-700 dark:text-indigo-300">
+                Note: Evaluated descriptive and code questions will remain unaffected. All matching MCQ and boolean answers will be automatically updated across all candidate scorecards.
+              </p>
+            </div>
+          )}
+
+          {decision === 'approve_skip_all' && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+              <span className="font-bold flex items-center space-x-1">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>Debatable Question Skipping Rule:</span>
+              </span>
+              <p className="text-[11px] leading-relaxed">
+                Full marks ({challenge.questionMarks} marks) will be awarded to all candidates who attempted the exam. Each candidate's score will be recalculated and rounded off to the next nearest integer.
+              </p>
             </div>
           )}
 
@@ -270,15 +425,7 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
             />
           </div>
 
-          {/* Automated Action Note */}
-          <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-300 flex items-center space-x-2">
-            <Award className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>
-              On authorization, the candidate's submission score, percentage, and pass/fail standing will be automatically recomputed in Firestore.
-            </span>
-          </div>
-
-          {/* Buttons */}
+          {/* Actions */}
           <div className="pt-2 flex items-center justify-end space-x-3">
             <button
               type="button"
@@ -290,10 +437,10 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
             <button
               type="submit"
               disabled={submitting}
-              className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-900/20 transition-all disabled:opacity-50"
+              className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-900/20 transition-all disabled:opacity-50 cursor-pointer"
             >
-              <FileCheck className="w-3.5 h-3.5" />
-              <span>{submitting ? 'Authorizing & Updating...' : 'Authorize Final Decision'}</span>
+              <Check className="w-3.5 h-3.5" />
+              <span>{submitting ? 'Authorizing & Re-scoring...' : 'Authorize Determination & Apply Changes'}</span>
             </button>
           </div>
         </form>

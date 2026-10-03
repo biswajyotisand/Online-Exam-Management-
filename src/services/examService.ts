@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
-import { Exam, Question, Submission, UserProfile, AuditLog, UserRole, SystemPasscodes, QuestionChallenge, ChallengeStatus, ChallengeReason } from '../types/exam';
+import { Exam, Question, Submission, UserProfile, AuditLog, UserRole, SystemPasscodes, QuestionChallenge, ChallengeStatus, ChallengeReason, CandidateChallengeSnapshot } from '../types/exam';
 import { hashPassword } from '../lib/authCrypto';
 
 const USERS_COL = 'users';
@@ -901,15 +901,38 @@ export const examService = {
   },
 
   // ---- Questions ----
-  async getQuestions(examId: string): Promise<Question[]> {
+  async getQuestions(examId: string, forCandidate: boolean = false): Promise<Question[]> {
     const path = `${EXAMS_COL}/${examId}/questions`;
     try {
       const snap = await getDocs(collection(db, EXAMS_COL, examId, 'questions'));
       const questions = snap.docs.map((d) => d.data() as Question);
-      return questions.sort((a, b) => a.order - b.order);
+      const sorted = questions.sort((a, b) => a.order - b.order);
+
+      if (forCandidate) {
+        // Leak Prevention: Strip correct answers, rubrics, and explanations before reaching the candidate's browser
+        return sorted.map((q) => {
+          const sanitized: Question = {
+            ...q,
+            correctAnswer: undefined,
+            rubric: undefined,
+            explanation: undefined,
+          };
+          delete (sanitized as any).correctAnswer;
+          delete (sanitized as any).rubric;
+          delete (sanitized as any).explanation;
+          return sanitized;
+        });
+      }
+
+      return sorted;
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, path);
+      return [];
     }
+  },
+
+  async getQuestionsForCandidate(examId: string): Promise<Question[]> {
+    return this.getQuestions(examId, true);
   },
 
   async saveQuestion(question: Question): Promise<void> {
@@ -957,6 +980,46 @@ export const examService = {
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  },
+
+  async batchSaveQuestions(examId: string, newQuestions: Question[]): Promise<void> {
+    try {
+      for (const q of newQuestions) {
+        const cleaned = cleanFirestoreData(q);
+        await setDoc(doc(db, EXAMS_COL, examId, 'questions', q.id), cleaned);
+      }
+      // Update exam question count and total marks
+      const allQs = await this.getQuestions(examId);
+      const totalMarks = allQs.reduce((sum, q) => sum + (q.marks || 0), 0);
+      await updateDoc(doc(db, EXAMS_COL, examId), {
+        questionsCount: allQs.length,
+        totalMarks: totalMarks,
+        updatedAt: new Date().toISOString(),
+      });
+      await this.logAction('BATCH_QUESTIONS_IMPORTED', `Imported ${newQuestions.length} questions into exam ${examId}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `${EXAMS_COL}/${examId}/questions`);
+      throw error;
+    }
+  },
+
+  async updateExamAttemptRules(
+    examId: string,
+    maxQuestionsToAttempt?: number | null
+  ): Promise<void> {
+    try {
+      const updates: any = {
+        updatedAt: new Date().toISOString(),
+      };
+      if (maxQuestionsToAttempt !== undefined) {
+        updates.maxQuestionsToAttempt = maxQuestionsToAttempt && maxQuestionsToAttempt > 0 ? maxQuestionsToAttempt : null;
+      }
+      await updateDoc(doc(db, EXAMS_COL, examId), updates);
+      await this.logAction('EXAM_ATTEMPT_RULES_UPDATED', `Updated maxQuestionsToAttempt to ${maxQuestionsToAttempt} for exam ${examId}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
+      throw error;
     }
   },
 
@@ -1098,6 +1161,10 @@ export const examService = {
       const percentage = exam.totalMarks > 0 ? Math.round((autoTotalScore / exam.totalMarks) * 100) : 0;
       const passed = autoTotalScore >= exam.passingMarks;
 
+      const attemptedQuestionsCount = questions.filter((q) => Boolean(answers[q.id]?.answer?.trim())).length;
+      const compulsoryQuestions = questions.filter((q) => Boolean(q.isMandatory));
+      const compulsoryAttemptedCount = compulsoryQuestions.filter((q) => Boolean(answers[q.id]?.answer?.trim())).length;
+
       const updates: Partial<Submission> = {
         answers: scoredAnswers,
         status,
@@ -1107,6 +1174,9 @@ export const examService = {
         maxScore: exam.totalMarks,
         percentage,
         passed: !hasSubjective ? passed : false,
+        attemptedQuestionsCount,
+        compulsoryAttemptedCount,
+        compulsoryTotalCount: compulsoryQuestions.length,
         updatedAt: new Date().toISOString(),
         ...(status === 'evaluated' ? { evaluatedAt: new Date().toISOString() } : {}),
       };
@@ -1154,6 +1224,110 @@ export const examService = {
       await this.logAction('SUBMISSION_EVALUATED', `Submission ${submissionId} evaluated. Final score: ${finalTotalScore}/${exam.totalMarks} (${passed ? 'PASSED' : 'FAILED'})`);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${SUBMISSIONS_COL}/${submissionId}`);
+    }
+  },
+
+  // Finalize and release grade for objective question papers (MCQ / True-False)
+  // RULE: Evaluator does not input each score for MCQ & True/False; evaluated automatically against Paper Setter's key.
+  async finalizeObjectiveSubmission(
+    submissionId: string,
+    evaluatorId: string,
+    evaluatorName: string,
+    evaluatorNotes?: string
+  ): Promise<Submission> {
+    try {
+      const subRef = doc(db, SUBMISSIONS_COL, submissionId);
+      const subSnap = await getDoc(subRef);
+      if (!subSnap.exists()) throw new Error('Submission not found');
+      const sub = subSnap.data() as Submission;
+
+      const examRef = doc(db, EXAMS_COL, sub.examId);
+      const examSnap = await getDoc(examRef);
+      if (!examSnap.exists()) throw new Error('Exam not found');
+      const exam = examSnap.data() as Exam;
+
+      const questions = await this.getQuestions(sub.examId);
+      const updatedAnswers: Record<string, any> = { ...(sub.answers || {}) };
+
+      let totalScore = 0;
+      for (const q of questions) {
+        const currentAnsItem = updatedAnswers[q.id];
+        const studentAns = (currentAnsItem?.answer || '').trim();
+
+        if (q.type === 'mcq' || q.type === 'boolean') {
+          // Evaluated automatically according to correct option provided by paper setter
+          const isCorrect = q.correctAnswer && studentAns.toLowerCase() === q.correctAnswer.trim().toLowerCase();
+          const marks = isCorrect ? q.marks : 0;
+          totalScore += marks;
+
+          updatedAnswers[q.id] = {
+            ...(currentAnsItem || { questionId: q.id, answer: studentAns }),
+            marksObtained: marks,
+            isEvaluated: true,
+            evaluatorFeedback: isCorrect
+              ? `Auto-evaluated: Correct as per Paper Setter answer key ("${q.correctAnswer}"). Full marks awarded.`
+              : studentAns
+              ? `Auto-evaluated: Incorrect. Selected "${studentAns}", correct option was "${q.correctAnswer}".`
+              : `Auto-evaluated: Question unattempted by candidate.`,
+          };
+        } else {
+          // Descriptive: keep existing evaluated marks or 0
+          totalScore += Number(currentAnsItem?.marksObtained || 0);
+        }
+      }
+
+      const effectiveTotalMarks = exam.totalMarks || sub.maxScore || 100;
+      const effectivePassingMarks = exam.passingMarks || Math.round(effectiveTotalMarks * 0.4);
+      const percentage = effectiveTotalMarks > 0 ? Math.round((totalScore / effectiveTotalMarks) * 100) : 0;
+      const passed = totalScore >= effectivePassingMarks;
+
+      const updates: Partial<Submission> = {
+        answers: updatedAnswers,
+        totalScore,
+        maxScore: effectiveTotalMarks,
+        percentage,
+        passed,
+        status: 'evaluated',
+        evaluatorId,
+        evaluatorNotes: evaluatorNotes || `Evaluated automatically from Paper Setter answer keys and grade finalized by ${evaluatorName}.`,
+        evaluatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await updateDoc(subRef, updates);
+      await this.logAction(
+        'OBJECTIVE_PAPER_FINALIZED',
+        `Evaluator ${evaluatorName} finalized & released grade for submission ${sub.id} (Candidate: ${sub.participantName}, Score: ${totalScore}/${effectiveTotalMarks}).`
+      );
+
+      const updatedSnap = await getDoc(subRef);
+      return updatedSnap.data() as Submission;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${SUBMISSIONS_COL}/${submissionId}`);
+      throw error;
+    }
+  },
+
+  // Batch finalize all pending objective submissions for an exam
+  async batchFinalizeObjectiveSubmissions(
+    examId: string,
+    evaluatorId: string,
+    evaluatorName: string
+  ): Promise<{ finalizedCount: number }> {
+    try {
+      const subs = await this.getSubmissionsForExam(examId);
+      const pendingSubs = subs.filter((s) => s.status === 'submitted');
+      let finalizedCount = 0;
+
+      for (const s of pendingSubs) {
+        await this.finalizeObjectiveSubmission(s.id, evaluatorId, evaluatorName);
+        finalizedCount++;
+      }
+
+      return { finalizedCount };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
+      throw error;
     }
   },
 
@@ -1260,7 +1434,7 @@ export const examService = {
     data: {
       evaluatorId: string;
       evaluatorName: string;
-      evaluatorDecision: 'recommend_accept' | 'recommend_reject';
+      evaluatorDecision: 'recommend_accept' | 'recommend_reject' | 'recommend_skip_question';
       evaluatorRecommendedMarks?: number;
       evaluatorReviewNotes: string;
     }
@@ -1356,36 +1530,70 @@ export const examService = {
         const subData = subSnap.data() as Submission;
         const answers = { ...(subData.answers || {}) };
 
+        const examDoc = await getDoc(doc(db, EXAMS_COL, challenge.examId));
+        const exam = examDoc.exists() ? (examDoc.data() as Exam) : null;
+        const examTotal = exam ? exam.totalMarks : (subData.maxScore || 100);
+        const examPassing = exam ? exam.passingMarks : Math.round(examTotal * 0.4);
+
+        // Snapshot candidate data, marks, scorecard, and answers before resolution
+        const beforeSnapshot: CandidateChallengeSnapshot = subData.beforeChallengeSnapshot || {
+          capturedAt: new Date().toISOString(),
+          actionType: 'challenge_resolution',
+          questionId: challenge.questionId,
+          questionTitle: challenge.questionTitle,
+          reason: data.adminNotes,
+          totalMarks: examTotal,
+          passingMarks: examPassing,
+          totalScore: subData.totalScore ?? 0,
+          maxScore: subData.maxScore ?? examTotal,
+          percentage: subData.percentage ?? 0,
+          passed: subData.passed ?? false,
+          answers: JSON.parse(JSON.stringify(subData.answers || {})),
+        };
+
         if (answers[challenge.questionId]) {
+          const currentAns = answers[challenge.questionId];
+          const rawAns = (currentAns?.answer || '').trim();
+          const isAttempted = Boolean(
+            rawAns &&
+            rawAns !== '(Unattempted)' &&
+            rawAns !== '(No response)' &&
+            rawAns !== '(None)'
+          );
+
+          // Marks only increased if candidate attempted the question
+          const finalMarksAwarded = isAttempted ? resolvedMarks : 0;
+
           answers[challenge.questionId] = {
-            ...answers[challenge.questionId],
-            marksObtained: resolvedMarks,
+            ...currentAns,
+            marksObtained: finalMarksAwarded,
             challengeStatus: newStatus,
             evaluatorFeedback:
               data.decision === 'accept_revision'
-                ? `${answers[challenge.questionId].evaluatorFeedback || ''} [Marks revised to ${resolvedMarks} by Admin authorization on challenge review: "${data.adminNotes}"]`.trim()
-                : `${answers[challenge.questionId].evaluatorFeedback || ''} [Challenge reviewed and original mark upheld by Admin: "${data.adminNotes}"]`.trim(),
+                ? isAttempted
+                  ? `${currentAns.evaluatorFeedback || ''} [Marks revised to ${finalMarksAwarded} on Admin challenge authorization: "${data.adminNotes}"]`.trim()
+                  : `${currentAns.evaluatorFeedback || ''} [Question was unattempted: No marks awarded]`.trim()
+                : `${currentAns.evaluatorFeedback || ''} [Challenge reviewed and original mark upheld by Admin: "${data.adminNotes}"]`.trim(),
           };
 
-          // Recalculate total score
+          // Recalculate total score and round off to the next nearest integer
           let totalScore = 0;
           Object.values(answers).forEach((ans) => {
             totalScore += Number(ans.marksObtained || 0);
           });
 
-          // Fetch exam for passingMarks & maxMarks
-          const examDoc = await getDoc(doc(db, EXAMS_COL, challenge.examId));
-          const exam = examDoc.exists() ? (examDoc.data() as Exam) : null;
+          const roundedScore = Math.ceil(totalScore); // Rounded off to the next nearest integer
           const maxScore = exam ? exam.totalMarks : (subData.maxScore || 100);
-          const percentage = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+          const percentage = maxScore > 0 ? Math.round((roundedScore / maxScore) * 100) : 0;
           const passingMarks = exam ? exam.passingMarks : (maxScore * 0.4);
-          const passed = totalScore >= passingMarks;
+          const passed = roundedScore >= passingMarks;
 
           await updateDoc(subRef, {
             answers,
-            totalScore,
+            totalScore: roundedScore,
             percentage,
             passed,
+            beforeChallengeSnapshot: beforeSnapshot,
             updatedAt: new Date().toISOString(),
           });
         }
@@ -1401,6 +1609,483 @@ export const examService = {
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${CHALLENGES_COL}/${challengeId}`);
+      throw error;
+    }
+  },
+
+  // ---- Paper Setter Review of Question Challenge ----
+  async setterReviewChallenge(
+    challengeId: string,
+    data: {
+      setterId: string;
+      setterName: string;
+      setterDecision: 'recommend_alter_key' | 'uphold_original' | 'recommend_skip_question';
+      setterProposedAnswer?: string;
+      setterReviewNotes: string;
+    }
+  ): Promise<void> {
+    try {
+      const chRef = doc(db, CHALLENGES_COL, challengeId);
+      const chSnap = await getDoc(chRef);
+      if (!chSnap.exists()) throw new Error('Challenge record not found');
+      const challenge = chSnap.data() as QuestionChallenge;
+
+      const updates: Partial<QuestionChallenge> = {
+        status: 'under_evaluator_review',
+        setterId: data.setterId,
+        setterName: data.setterName,
+        setterDecision: data.setterDecision,
+        setterProposedAnswer: data.setterProposedAnswer || '',
+        setterReviewNotes: data.setterReviewNotes,
+        setterReviewedAt: new Date().toISOString(),
+      };
+
+      await updateDoc(chRef, cleanFirestoreData(updates));
+
+      await this.logAction(
+        'CHALLENGE_SETTER_REVIEWED',
+        `Paper Setter ${data.setterName} reviewed challenge for "${challenge.questionTitle}". Recommendation: ${data.setterDecision} ("${data.setterReviewNotes}")`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${CHALLENGES_COL}/${challengeId}`);
+      throw error;
+    }
+  },
+
+  // ---- Batch Challenge Submission (Single-Time Submission per Candidate) ----
+  async submitBatchChallenges(
+    submissionId: string,
+    examId: string,
+    examTitle: string,
+    participantId: string,
+    participantName: string,
+    participantEmail: string,
+    challenges: Array<{
+      questionId: string;
+      questionTitle: string;
+      questionType?: string;
+      questionMarks: number;
+      candidateAnswer: string;
+      originalMarksAwarded: number;
+      originalEvaluatorFeedback?: string;
+      challengeReason: ChallengeReason;
+      candidateExplanation: string;
+      supportingReference?: string;
+    }>
+  ): Promise<QuestionChallenge[]> {
+    try {
+      // Check if candidate already submitted challenges for this exam
+      const subRef = doc(db, SUBMISSIONS_COL, submissionId);
+      const subSnap = await getDoc(subRef);
+      if (!subSnap.exists()) throw new Error('Submission not found');
+      const subData = subSnap.data() as Submission;
+
+      if (subData.challengeSubmitted) {
+        throw new Error('Challenges have already been submitted for this examination. Re-submission is locked.');
+      }
+
+      // Check exam challenge deadline
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.challengeDeadline) {
+          const deadlinePassed = new Date() > new Date(examData.challengeDeadline);
+          if (deadlinePassed) {
+            throw new Error(`The scheduled challenge window for this examination expired on ${new Date(examData.challengeDeadline).toLocaleString()}. No new challenges can be submitted.`);
+          }
+        }
+      }
+
+      const createdList: QuestionChallenge[] = [];
+      const updatedAnswers = { ...(subData.answers || {}) };
+
+      for (const item of challenges) {
+        const challengeId = 'ch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        const newChallenge: QuestionChallenge = {
+          ...item,
+          id: challengeId,
+          examId,
+          examTitle,
+          submissionId,
+          participantId,
+          participantName,
+          participantEmail,
+          status: 'submitted',
+          submittedAt: new Date().toISOString(),
+        };
+
+        await setDoc(doc(db, CHALLENGES_COL, challengeId), cleanFirestoreData(newChallenge));
+        createdList.push(newChallenge);
+
+        if (updatedAnswers[item.questionId]) {
+          updatedAnswers[item.questionId] = {
+            ...updatedAnswers[item.questionId],
+            challengeId,
+            challengeStatus: 'submitted',
+          };
+        }
+      }
+
+      // Mark submission as challengeSubmitted to enforce single-time submission
+      await updateDoc(subRef, {
+        answers: updatedAnswers,
+        challengeSubmitted: true,
+        challengeSubmittedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      await this.logAction(
+        'BATCH_CHALLENGES_SUBMITTED',
+        `Candidate ${participantName} submitted ${challenges.length} challenge(s) for exam "${examTitle}" at a single time.`
+      );
+
+      return createdList;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, CHALLENGES_COL);
+      throw error;
+    }
+  },
+
+  // ---- Administrator Sets Challenge Deadline Window ----
+  async setExamChallengeDeadline(
+    examId: string,
+    deadline: string,
+    windowOpen: boolean,
+    adminName: string
+  ): Promise<void> {
+    try {
+      await updateDoc(doc(db, EXAMS_COL, examId), {
+        challengeDeadline: deadline,
+        challengeWindowOpen: windowOpen,
+        updatedAt: new Date().toISOString(),
+      });
+
+      await this.logAction(
+        'CHALLENGE_DEADLINE_SET',
+        `Administrator ${adminName} configured challenge deadline for exam ${examId} to ${new Date(deadline).toLocaleString()} (Window open: ${windowOpen})`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
+      throw error;
+    }
+  },
+
+  // ---- Recommend Question Skip (Evaluator or Paper Setter) ----
+  async recommendSkipQuestion(
+    examId: string,
+    questionId: string,
+    recommenderId: string,
+    recommenderName: string,
+    role: 'evaluator' | 'paper_setter',
+    reason: string
+  ): Promise<void> {
+    try {
+      const qRef = doc(db, EXAMS_COL, examId, 'questions', questionId);
+      await updateDoc(qRef, {
+        skipRecommendation: {
+          recommendedBy: recommenderName,
+          role,
+          reason,
+          recommendedAt: new Date().toISOString(),
+          status: 'pending',
+        },
+      });
+
+      await this.logAction(
+        'QUESTION_SKIP_RECOMMENDED',
+        `${role === 'evaluator' ? 'Evaluator' : 'Paper Setter'} ${recommenderName} recommended skipping question ${questionId} in exam ${examId}: "${reason}"`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}/questions/${questionId}`);
+      throw error;
+    }
+  },
+
+  // ---- Approve Question Skip & Re-score ALL Candidates ----
+  async approveSkipQuestionAndReScoreAll(
+    examId: string,
+    questionId: string,
+    adminId: string,
+    adminName: string,
+    reason: string
+  ): Promise<{ affectedCount: number; unattemptedCount: number }> {
+    try {
+      // 1. Fetch Question details
+      const qRef = doc(db, EXAMS_COL, examId, 'questions', questionId);
+      const qSnap = await getDoc(qRef);
+      if (!qSnap.exists()) throw new Error('Question not found');
+      const question = qSnap.data() as Question;
+
+      // 2. Mark Question as skipped
+      await updateDoc(qRef, {
+        isSkipped: true,
+        'skipRecommendation.status': 'approved',
+      });
+
+      // 3. Update Exam record:
+      // RULE: On Debatable Question Skip, total marks of the exam will decreased. Passing marks also be decreased proportionately and evaluation will be done accordingly.
+      const examRef = doc(db, EXAMS_COL, examId);
+      const examSnap = await getDoc(examRef);
+      if (!examSnap.exists()) throw new Error('Exam not found');
+      const examData = examSnap.data() as Exam;
+
+      const originalTotal = examData.originalTotalMarks || examData.totalMarks || 100;
+      const originalPassing = examData.originalPassingMarks || examData.passingMarks || Math.round(originalTotal * 0.4);
+      const currentTotal = examData.totalMarks || originalTotal;
+      const currentPassing = examData.passingMarks || originalPassing;
+
+      const questionMarks = Number(question.marks || 0);
+      // Decrease total marks of the exam by the debatable question's marks
+      const newTotalMarks = Math.max(1, currentTotal - questionMarks);
+      // Passing marks also decreased proportionately
+      const proportion = originalTotal > 0 ? (originalPassing / originalTotal) : 0.4;
+      const newPassingMarks = Math.max(1, Math.round(proportion * newTotalMarks));
+
+      const currentSkippedIds = examData.skippedQuestionIds || [];
+      const updatedSkippedIds = currentSkippedIds.includes(questionId)
+        ? currentSkippedIds
+        : [...currentSkippedIds, questionId];
+
+      const updatedSkippedInfo = {
+        ...(examData.skippedQuestionsInfo || {}),
+        [questionId]: {
+          reason,
+          recommendedBy: question.skipRecommendation?.recommendedBy || 'Evaluator',
+          role: question.skipRecommendation?.role || 'evaluator',
+          approvedBy: adminName,
+          approvedAt: new Date().toISOString(),
+          marksCredited: 0,
+        },
+      };
+
+      await updateDoc(examRef, {
+        totalMarks: newTotalMarks,
+        passingMarks: newPassingMarks,
+        originalTotalMarks: originalTotal,
+        originalPassingMarks: originalPassing,
+        skippedQuestionIds: updatedSkippedIds,
+        skippedQuestionsInfo: updatedSkippedInfo,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // 4. Recalculate Candidate Submissions for this exam
+      // Evaluation is done accordingly: candidate total score is re-evaluated across remaining questions,
+      // and Administrator preserves the candidate data, marks, scorecard, answer sheet before and after resolution.
+      const allSubmissions = await this.getSubmissionsForExam(examId);
+      let affectedCount = 0;
+      let unattemptedCount = 0;
+
+      for (const sub of allSubmissions) {
+        const answers = { ...(sub.answers || {}) };
+        const currentAns = answers[questionId];
+        const rawStudentAns = (currentAns?.answer || '').trim();
+
+        // Capture snapshot before challenge resolution so Administrator has full data, marks, scorecard, answer sheet
+        const beforeSnapshot: CandidateChallengeSnapshot = sub.beforeChallengeSnapshot || {
+          capturedAt: new Date().toISOString(),
+          actionType: 'debatable_question_skipped',
+          questionId,
+          questionTitle: question.title,
+          reason,
+          totalMarks: currentTotal,
+          passingMarks: currentPassing,
+          totalScore: sub.totalScore ?? 0,
+          maxScore: sub.maxScore ?? currentTotal,
+          percentage: sub.percentage ?? (currentTotal > 0 ? Math.round(((sub.totalScore ?? 0) / currentTotal) * 100) : 0),
+          passed: sub.passed ?? ((sub.totalScore ?? 0) >= currentPassing),
+          answers: JSON.parse(JSON.stringify(sub.answers || {})),
+        };
+
+        const isAttempted = Boolean(
+          rawStudentAns &&
+          rawStudentAns !== '(Unattempted)' &&
+          rawStudentAns !== '(No response)' &&
+          rawStudentAns !== '(None)'
+        );
+
+        if (isAttempted) {
+          affectedCount++;
+        } else {
+          unattemptedCount++;
+        }
+
+        // Skipped debatable question is excluded from evaluation
+        answers[questionId] = {
+          ...(currentAns || { questionId, answer: rawStudentAns || '(Unattempted)' }),
+          marksObtained: 0,
+          isEvaluated: true,
+          isSkipped: true,
+          evaluatorFeedback: `[Debatable Question Skipped]: Question withdrawn from evaluation by Administrator (${adminName}). Exam total marks decreased from ${currentTotal} to ${newTotalMarks}, passing marks decreased proportionately from ${currentPassing} to ${newPassingMarks}. Reason: "${reason}".`,
+        };
+
+        // Recalculate total score across remaining active (non-skipped) questions
+        let rawTotal = 0;
+        Object.entries(answers).forEach(([qId, ans]) => {
+          if (!updatedSkippedIds.includes(qId)) {
+            rawTotal += Number(ans.marksObtained || 0);
+          }
+        });
+
+        const roundedScore = Math.ceil(rawTotal); // Rounded off to the next nearest integer
+        const percentage = newTotalMarks > 0 ? Math.round((roundedScore / newTotalMarks) * 100) : 0;
+        const passed = roundedScore >= newPassingMarks;
+
+        await updateDoc(doc(db, SUBMISSIONS_COL, sub.id), {
+          answers,
+          totalScore: roundedScore,
+          maxScore: newTotalMarks,
+          percentage,
+          passed,
+          beforeChallengeSnapshot: beforeSnapshot,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      await this.logAction(
+        'QUESTION_SKIPPED_ALL_RESCORED',
+        `Administrator ${adminName} approved skipping debatable question "${question.title}" (ID: ${questionId}). Exam total marks decreased from ${currentTotal} to ${newTotalMarks}. Passing marks decreased proportionately from ${currentPassing} to ${newPassingMarks}. Re-evaluated ${allSubmissions.length} candidates (${affectedCount} attempted, ${unattemptedCount} unattempted).`
+      );
+
+      return { affectedCount, unattemptedCount };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
+      throw error;
+    }
+  },
+
+  // ---- Alter Answer Key on Challenge & Re-score Candidates (Excluding Descriptive) ----
+  // RULE: On challenge of a question, number will be increased/decreased for those candidates who attempted the question.
+  async alterAnswerKeyAndReScoreAll(
+    examId: string,
+    questionId: string,
+    newCorrectAnswer: string,
+    adminId: string,
+    adminName: string,
+    notes: string
+  ): Promise<{ affectedCount: number; increasedCount: number; decreasedCount: number; unattemptedCount: number }> {
+    try {
+      // 1. Fetch Question details
+      const qRef = doc(db, EXAMS_COL, examId, 'questions', questionId);
+      const qSnap = await getDoc(qRef);
+      if (!qSnap.exists()) throw new Error('Question not found');
+      const question = qSnap.data() as Question;
+
+      // Update question's correct answer
+      await updateDoc(qRef, {
+        correctAnswer: newCorrectAnswer.trim(),
+      });
+
+      // 2. Fetch Exam details
+      const examRef = doc(db, EXAMS_COL, examId);
+      const examSnap = await getDoc(examRef);
+      if (!examSnap.exists()) throw new Error('Exam not found');
+      const examData = examSnap.data() as Exam;
+
+      // 3. Recalculate Candidate Submissions for this exam
+      // Marks increased or decreased strictly for candidates who ATTEMPTED the question
+      const allSubmissions = await this.getSubmissionsForExam(examId);
+      let affectedCount = 0;
+      let increasedCount = 0;
+      let decreasedCount = 0;
+      let unattemptedCount = 0;
+
+      for (const sub of allSubmissions) {
+        const answers = { ...(sub.answers || {}) };
+
+        // Process only non-descriptive objective questions (MCQ / Boolean)
+        if (question.type === 'mcq' || question.type === 'boolean') {
+          const currentAnsItem = answers[questionId];
+          const rawStudentAns = (currentAnsItem?.answer || '').trim();
+
+          // Capture snapshot before challenge resolution so Administrator has full data, marks, scorecard, answer sheet
+          const beforeSnapshot: CandidateChallengeSnapshot = sub.beforeChallengeSnapshot || {
+            capturedAt: new Date().toISOString(),
+            actionType: 'challenge_answer_key_revision',
+            questionId,
+            questionTitle: question.title,
+            reason: notes,
+            totalMarks: examData.totalMarks || sub.maxScore || 100,
+            passingMarks: examData.passingMarks || Math.round((examData.totalMarks || 100) * 0.4),
+            totalScore: sub.totalScore ?? 0,
+            maxScore: sub.maxScore ?? examData.totalMarks ?? 100,
+            percentage: sub.percentage ?? 0,
+            passed: sub.passed ?? false,
+            answers: JSON.parse(JSON.stringify(sub.answers || {})),
+          };
+
+          const isAttempted = Boolean(
+            rawStudentAns &&
+            rawStudentAns !== '(Unattempted)' &&
+            rawStudentAns !== '(No response)' &&
+            rawStudentAns !== '(None)'
+          );
+
+          if (!isAttempted) {
+            // Candidate did NOT attempt the question: marks remain 0 without increase or decrease
+            unattemptedCount++;
+            answers[questionId] = {
+              ...(currentAnsItem || { questionId, answer: '(Unattempted)' }),
+              marksObtained: 0,
+              isEvaluated: true,
+              evaluatorFeedback: `[Key Revised on Challenge]: Question was unattempted by candidate. No marks awarded.`,
+            };
+          } else {
+            // Candidate ATTEMPTED the question: marks increase or decrease based on new key
+            const previousMarks = Number(currentAnsItem?.marksObtained || 0);
+            const isCorrect = rawStudentAns.toLowerCase() === newCorrectAnswer.trim().toLowerCase();
+            const newMarks = isCorrect ? question.marks : 0;
+
+            if (newMarks > previousMarks) {
+              increasedCount++;
+            } else if (newMarks < previousMarks) {
+              decreasedCount++;
+            }
+
+            answers[questionId] = {
+              ...(currentAnsItem || { questionId, answer: rawStudentAns }),
+              marksObtained: newMarks,
+              isEvaluated: true,
+              evaluatorFeedback:
+                newMarks > previousMarks
+                  ? `[Key Revised on Challenge]: Candidate attempted this question with "${rawStudentAns}". Matches revised key "${newCorrectAnswer}". Marks increased from ${previousMarks} to ${newMarks}/${question.marks}. Note: "${notes}"`
+                  : newMarks < previousMarks
+                  ? `[Key Revised on Challenge]: Candidate attempted this question with "${rawStudentAns}". Does not match revised key "${newCorrectAnswer}". Marks decreased from ${previousMarks} to ${newMarks}/${question.marks}. Note: "${notes}"`
+                  : `[Key Revised on Challenge]: Candidate attempted this question with "${rawStudentAns}". Evaluated with revised key "${newCorrectAnswer}". Awarded: ${newMarks}/${question.marks}. Note: "${notes}"`,
+            };
+
+            affectedCount++;
+          }
+
+          // Recalculate total score rounded off to the next nearest integer
+          let rawTotal = 0;
+          Object.values(answers).forEach((ans) => {
+            rawTotal += Number(ans.marksObtained || 0);
+          });
+
+          const roundedScore = Math.ceil(rawTotal); // Rounded off to the next nearest integer
+          const maxScore = examData.totalMarks || sub.maxScore || 100;
+          const percentage = maxScore > 0 ? Math.round((roundedScore / maxScore) * 100) : 0;
+          const passed = roundedScore >= examData.passingMarks;
+
+          await updateDoc(doc(db, SUBMISSIONS_COL, sub.id), {
+            answers,
+            totalScore: roundedScore,
+            percentage,
+            passed,
+            beforeChallengeSnapshot: beforeSnapshot,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      await this.logAction(
+        'ANSWER_KEY_ALTERED_ALL_RESCORED',
+        `Administrator ${adminName} altered answer key for question "${question.title}" to "${newCorrectAnswer}". Re-scored ${affectedCount} candidates who attempted (${increasedCount} marks increased, ${decreasedCount} marks decreased, ${unattemptedCount} unattempted kept at 0 marks).`
+      );
+
+      return { affectedCount, increasedCount, decreasedCount, unattemptedCount };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
       throw error;
     }
   },

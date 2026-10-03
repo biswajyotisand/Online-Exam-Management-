@@ -44,6 +44,15 @@ export interface Question {
   rubric?: string; // guidelines for evaluator
   explanation?: string;
   starterCode?: string;
+  isMandatory?: boolean; // Selective compulsory question: candidate MUST attend
+  isSkipped?: boolean; // When question is marked debatable / excluded
+  skipRecommendation?: {
+    recommendedBy: string;
+    role: 'evaluator' | 'paper_setter';
+    reason: string;
+    recommendedAt: string;
+    status: 'pending' | 'approved' | 'rejected';
+  };
   createdAt: string;
 }
 
@@ -65,7 +74,10 @@ export interface Exam {
   durationMinutes: number;
   totalMarks: number;
   passingMarks: number;
+  originalTotalMarks?: number; // Preserved before debatable questions are skipped
+  originalPassingMarks?: number; // Preserved before debatable questions are skipped
   questionsCount: number;
+  maxQuestionsToAttempt?: number; // e.g. candidate can appear in only 100 out of 110 questions
   instructions?: string;
   proctoringEnabled?: boolean;
   
@@ -93,6 +105,21 @@ export interface Exam {
   resultsPublishedAt?: string;
   adminResultNotes?: string;
 
+  // Challenge Window (Scheduled Date & Time set by Administrator)
+  challengeDeadline?: string; // ISO string up to which challenges can be submitted
+  challengeWindowOpen?: boolean;
+
+  // Question Skipping / Debatable Questions handling
+  skippedQuestionIds?: string[];
+  skippedQuestionsInfo?: Record<string, {
+    reason: string;
+    recommendedBy: string;
+    role: 'evaluator' | 'paper_setter';
+    approvedBy: string;
+    approvedAt: string;
+    marksCredited: number;
+  }>;
+
   createdAt: string;
   updatedAt?: string;
 }
@@ -104,6 +131,7 @@ export interface AnswerItem {
   marksObtained?: number;
   evaluatorFeedback?: string;
   isEvaluated?: boolean;
+  isSkipped?: boolean;
   // Challenge tracking
   challengeId?: string;
   challengeStatus?: ChallengeStatus;
@@ -111,6 +139,7 @@ export interface AnswerItem {
 
 export type ChallengeStatus =
   | 'submitted'
+  | 'under_setter_review'
   | 'under_evaluator_review'
   | 'forwarded_to_admin'
   | 'resolved_accepted'
@@ -148,10 +177,18 @@ export interface QuestionChallenge {
 
   status: ChallengeStatus;
 
+  // Paper Setter Review Stage (Since Paper Setter authored the question and selected the correct answer)
+  setterId?: string;
+  setterName?: string;
+  setterDecision?: 'recommend_alter_key' | 'uphold_original' | 'recommend_skip_question';
+  setterProposedAnswer?: string;
+  setterReviewNotes?: string;
+  setterReviewedAt?: string;
+
   // Evaluator Review Stage
   evaluatorId?: string;
   evaluatorName?: string;
-  evaluatorDecision?: 'recommend_accept' | 'recommend_reject';
+  evaluatorDecision?: 'recommend_accept' | 'recommend_reject' | 'recommend_skip_question';
   evaluatorRecommendedMarks?: number;
   evaluatorReviewNotes?: string;
   evaluatorReviewedAt?: string;
@@ -159,10 +196,25 @@ export interface QuestionChallenge {
   // Administrator Final Authorization Stage
   adminId?: string;
   adminName?: string;
-  adminDecision?: 'accept_revision' | 'uphold_original';
+  adminDecision?: 'accept_revision' | 'uphold_original' | 'approve_skip_question';
   finalAwardedMarks?: number;
   adminDecisionNotes?: string;
   resolvedAt?: string;
+}
+
+export interface CandidateChallengeSnapshot {
+  capturedAt: string;
+  actionType: 'challenge_answer_key_revision' | 'debatable_question_skipped' | 'challenge_resolution' | 'initial_evaluation';
+  questionId?: string;
+  questionTitle?: string;
+  reason?: string;
+  totalMarks: number;
+  passingMarks: number;
+  totalScore: number;
+  maxScore: number;
+  percentage: number;
+  passed: boolean;
+  answers: Record<string, AnswerItem>;
 }
 
 export interface Submission {
@@ -178,9 +230,17 @@ export interface Submission {
   maxScore?: number;
   percentage?: number;
   passed?: boolean;
+  attemptedQuestionsCount?: number;
+  compulsoryAttemptedCount?: number;
+  compulsoryTotalCount?: number;
   tabSwitchCount: number;
+  violationStrikes?: number;
+  challengeSubmitted?: boolean;
+  challengeSubmittedAt?: string;
   evaluatorId?: string;
   evaluatorNotes?: string;
+  beforeChallengeSnapshot?: CandidateChallengeSnapshot;
+  evaluationHistory?: CandidateChallengeSnapshot[];
   startedAt: string;
   submittedAt?: string;
   evaluatedAt?: string;

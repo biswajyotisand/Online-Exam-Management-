@@ -113,7 +113,7 @@ export const ParticipantPortal: React.FC = () => {
 
       // Start or resume submission
       const sub = await examService.startSubmission(selectedExamToStart, activeCandidateProfile);
-      const qList = await examService.getQuestions(selectedExamToStart.id);
+      const qList = await examService.getQuestionsForCandidate(selectedExamToStart.id);
 
       setSelectedExamToStart(null);
       setActiveTakingSession({
@@ -138,7 +138,7 @@ export const ParticipantPortal: React.FC = () => {
       setLoading(true);
       const exam = await examService.getExamById(sub.examId);
       if (!exam) return;
-      const qList = await examService.getQuestions(sub.examId);
+      const qList = await examService.getQuestionsForCandidate(sub.examId);
       setActiveTakingSession({
         exam,
         submission: sub,
@@ -155,7 +155,7 @@ export const ParticipantPortal: React.FC = () => {
     try {
       setLoading(true);
       const exam = await examService.getExamById(sub.examId);
-      const qList = await examService.getQuestions(sub.examId);
+      const qList = await examService.getQuestionsForCandidate(sub.examId);
       setAttemptSlipSubmission({
         submission: sub,
         exam,

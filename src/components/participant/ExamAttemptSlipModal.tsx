@@ -51,13 +51,20 @@ export const ExamAttemptSlipModal: React.FC<ExamAttemptSlipModalProps> = ({
   const totalQuestions = questions.length;
   let attemptedCount = 0;
   let unattemptedCount = 0;
+  let compulsoryTotal = 0;
+  let compulsoryAttempted = 0;
 
   for (const q of questions) {
     const ans = submission.answers?.[q.id]?.answer;
-    if (ans && ans.trim().length > 0) {
+    const isAtt = Boolean(ans && ans.trim().length > 0);
+    if (isAtt) {
       attemptedCount++;
     } else {
       unattemptedCount++;
+    }
+    if (q.isMandatory) {
+      compulsoryTotal++;
+      if (isAtt) compulsoryAttempted++;
     }
   }
 
@@ -165,33 +172,58 @@ export const ExamAttemptSlipModal: React.FC<ExamAttemptSlipModalProps> = ({
           </div>
 
           {/* Attempt Statistics Summary Cards */}
-          <div className="grid grid-cols-3 gap-3 text-center">
+          <div className={`grid ${compulsoryTotal > 0 || (exam?.maxQuestionsToAttempt && exam.maxQuestionsToAttempt < totalQuestions) ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-3 text-center`}>
             <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-                Total Questions
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">
+                Total Pool
               </span>
-              <span className="text-2xl font-black text-slate-800 dark:text-slate-100">
+              <span className="text-xl sm:text-2xl font-black text-slate-800 dark:text-slate-100">
                 {totalQuestions}
               </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Questions</span>
+            </div>
+
+            <div className="p-3 rounded-2xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/20">
+              <span className="text-[10px] font-semibold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider block">
+                Permitted Attempt
+              </span>
+              <span className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                {exam?.maxQuestionsToAttempt || totalQuestions}
+              </span>
+              <span className="text-[10px] text-indigo-500/80 block mt-0.5">Max allowed</span>
             </div>
 
             <div className="p-3 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-950/20">
-              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block">
+              <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block">
                 Attempted
               </span>
-              <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+              <span className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400">
                 {attemptedCount}
               </span>
+              <span className="text-[10px] text-emerald-600/80 block mt-0.5">Responses</span>
             </div>
 
-            <div className="p-3 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20">
-              <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider block">
-                Unattempted
-              </span>
-              <span className="text-2xl font-black text-amber-600 dark:text-amber-400">
-                {unattemptedCount}
-              </span>
-            </div>
+            {compulsoryTotal > 0 ? (
+              <div className="p-3 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20">
+                <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider block">
+                  ★ Compulsory
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-amber-600 dark:text-amber-400">
+                  {compulsoryAttempted} / {compulsoryTotal}
+                </span>
+                <span className="text-[10px] text-amber-600/80 block mt-0.5">Must attend</span>
+              </div>
+            ) : (
+              <div className="p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">
+                  Unattempted
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-slate-600 dark:text-slate-300">
+                  {unattemptedCount}
+                </span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">Skipped</span>
+              </div>
+            )}
           </div>
 
           {/* Question by Question Response Log */}
@@ -238,6 +270,15 @@ export const ExamAttemptSlipModal: React.FC<ExamAttemptSlipModalProps> = ({
                               <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                                 {q.type}
                               </span>
+                              {q.isMandatory ? (
+                                <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-800 flex items-center space-x-1">
+                                  <span>★ COMPULSORY (Must Attend)</span>
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-medium uppercase px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-750 text-slate-400">
+                                  ELECTIVE
+                                </span>
+                              )}
                             </div>
                             <p className="font-semibold text-slate-900 dark:text-white mt-1">
                               {q.title}

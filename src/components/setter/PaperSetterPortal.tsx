@@ -20,9 +20,18 @@ import {
   X,
   Lock,
   ShieldAlert,
-  Calendar
+  Calendar,
+  FileSpreadsheet,
+  Star,
+  Upload,
+  CheckSquare,
+  Settings,
+  Layers
 } from 'lucide-react';
 import { ProposeScheduleModal } from './ProposeScheduleModal';
+import { SetterReviewChallengeModal } from './SetterReviewChallengeModal';
+import { ImportQuestionsModal } from './ImportQuestionsModal';
+import { QuestionChallenge } from '../../types/exam';
 
 export const PaperSetterPortal: React.FC = () => {
   const { profile, isAdmin, activeRole } = useAuth();
@@ -30,13 +39,21 @@ export const PaperSetterPortal: React.FC = () => {
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [challenges, setChallenges] = useState<QuestionChallenge[]>([]);
+  const [setterReviewModalCh, setSetterReviewModalCh] = useState<QuestionChallenge | null>(null);
+  const [setterTab, setSetterTab] = useState<'questions' | 'challenges'>('questions');
   const [loading, setLoading] = useState(true);
   const [examModalOpen, setExamModalOpen] = useState(false);
   const [questionModalOpen, setQuestionModalOpen] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+
+  // Attempt & pool regulation state
+  const [maxAttemptInput, setMaxAttemptInput] = useState<string>('');
+  const [savingAttemptRules, setSavingAttemptRules] = useState(false);
 
   // Form states for creating exam
   const [examForm, setExamForm] = useState({
@@ -46,6 +63,7 @@ export const PaperSetterPortal: React.FC = () => {
     durationMinutes: 45,
     totalMarks: 50,
     passingMarks: 25,
+    maxQuestionsToAttempt: undefined as number | undefined,
     instructions: '1. Attempt all questions.\n2. Do not switch tabs during examination.\n3. Verify all answers before final submission.',
     proctoringEnabled: true,
   });
@@ -60,6 +78,7 @@ export const PaperSetterPortal: React.FC = () => {
     rubric: string;
     explanation: string;
     starterCode: string;
+    isMandatory: boolean;
   }>({
     title: '',
     type: 'mcq',
@@ -69,13 +88,18 @@ export const PaperSetterPortal: React.FC = () => {
     rubric: '',
     explanation: '',
     starterCode: '',
+    isMandatory: false,
   });
 
   const loadExams = async () => {
     try {
       setLoading(true);
-      const all = await examService.getAllExams();
+      const [all, allChallenges] = await Promise.all([
+        examService.getAllExams(),
+        examService.getAllChallenges().catch(() => []),
+      ]);
       setExams(all);
+      setChallenges(allChallenges);
       if (selectedExam) {
         const refreshed = all.find((e) => e.id === selectedExam.id);
         if (refreshed) {
@@ -101,11 +125,65 @@ export const PaperSetterPortal: React.FC = () => {
 
   const handleSelectExam = async (exam: Exam) => {
     setSelectedExam(exam);
+    if (exam.maxQuestionsToAttempt !== undefined && exam.maxQuestionsToAttempt !== null) {
+      setMaxAttemptInput(String(exam.maxQuestionsToAttempt));
+    } else {
+      setMaxAttemptInput('');
+    }
     try {
       const qList = await examService.getQuestions(exam.id);
       setQuestions(qList);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleSaveAttemptRules = async () => {
+    if (!selectedExam) return;
+    if (isViewOnlyAdmin) {
+      setErrorNotice('Access Denied: Administrator is in view-only mode.');
+      return;
+    }
+    try {
+      setSavingAttemptRules(true);
+      const val = maxAttemptInput.trim() ? Number(maxAttemptInput) : null;
+      if (val !== null && (isNaN(val) || val <= 0)) {
+        setErrorNotice('Maximum questions to attempt must be a positive number.');
+        return;
+      }
+      if (val !== null && questions.length > 0 && val > questions.length) {
+        setErrorNotice(`Maximum attempt (${val}) cannot exceed total questions in pool (${questions.length}).`);
+        return;
+      }
+      await examService.updateExamAttemptRules(selectedExam.id, val);
+      setSuccessNotice(
+        val
+          ? `Attempt rule configured: Candidates can appear in maximum ${val} out of ${questions.length} questions.`
+          : 'Attempt rule reset: Candidates can attempt all questions in the pool.'
+      );
+      setTimeout(() => setSuccessNotice(null), 3500);
+      await loadExams();
+    } catch (err: any) {
+      setErrorNotice('Failed to update attempt rules: ' + err.message);
+    } finally {
+      setSavingAttemptRules(false);
+    }
+  };
+
+  const handleToggleQuestionMandatory = async (q: Question) => {
+    if (isViewOnlyAdmin) return;
+    try {
+      const updatedQ: Question = {
+        ...q,
+        isMandatory: !q.isMandatory,
+      };
+      await examService.saveQuestion(updatedQ);
+      setSuccessNotice(`Question Q${q.order} marked as ${updatedQ.isMandatory ? 'COMPULSORY (Must Attend)' : 'ELECTIVE / OPTIONAL'}.`);
+      setTimeout(() => setSuccessNotice(null), 3000);
+      const qList = await examService.getQuestions(q.examId);
+      setQuestions(qList);
+    } catch (err: any) {
+      setErrorNotice('Failed to update question: ' + err.message);
     }
   };
 
@@ -133,6 +211,7 @@ export const PaperSetterPortal: React.FC = () => {
         durationMinutes: Number(examForm.durationMinutes),
         totalMarks: Number(examForm.totalMarks),
         passingMarks: Number(examForm.passingMarks),
+        maxQuestionsToAttempt: examForm.maxQuestionsToAttempt ? Number(examForm.maxQuestionsToAttempt) : undefined,
         questionsCount: 0,
         instructions: examForm.instructions,
         proctoringEnabled: examForm.proctoringEnabled,
@@ -148,6 +227,7 @@ export const PaperSetterPortal: React.FC = () => {
         durationMinutes: 45,
         totalMarks: 50,
         passingMarks: 25,
+        maxQuestionsToAttempt: undefined,
         instructions: '1. Attempt all questions.\n2. Do not switch tabs during examination.\n3. Verify all answers before final submission.',
         proctoringEnabled: true,
       });
@@ -177,6 +257,7 @@ export const PaperSetterPortal: React.FC = () => {
       rubric: '',
       explanation: '',
       starterCode: '',
+      isMandatory: false,
     });
     setQuestionModalOpen(true);
   };
@@ -196,6 +277,7 @@ export const PaperSetterPortal: React.FC = () => {
       rubric: q.rubric || '',
       explanation: q.explanation || '',
       starterCode: q.starterCode || '',
+      isMandatory: Boolean(q.isMandatory),
     });
     setQuestionModalOpen(true);
   };
@@ -223,6 +305,7 @@ export const PaperSetterPortal: React.FC = () => {
         title: questionForm.title.trim(),
         type: questionForm.type,
         marks: Number(questionForm.marks),
+        isMandatory: Boolean(questionForm.isMandatory),
         createdAt: editingQuestion?.createdAt || new Date().toISOString(),
       };
 
@@ -567,110 +650,284 @@ export const PaperSetterPortal: React.FC = () => {
                 )}
               </div>
 
-              {/* Marks Summary Pill */}
-              <div className="flex flex-wrap items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-750 border border-slate-200 dark:border-slate-700 text-xs">
-                <div className="flex items-center space-x-4">
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400">Total Questions:</span>{' '}
-                    <span className="font-bold text-slate-900 dark:text-white">{questions.length}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400">Target Marks:</span>{' '}
-                    <span className="font-bold text-slate-900 dark:text-white">{selectedExam.totalMarks}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400">Allocated Sum:</span>{' '}
-                    <span
-                      className={`font-bold ${
-                        currentQuestionsMarksSum === selectedExam.totalMarks
-                          ? 'text-emerald-600 dark:text-emerald-400'
-                          : 'text-amber-600 dark:text-amber-400'
-                      }`}
-                    >
-                      {currentQuestionsMarksSum}
-                    </span>
-                  </div>
-                </div>
+              {/* Studio Tabs: Questions vs Challenged Questions */}
+              <div className="flex border-b border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setSetterTab('questions')}
+                  className={`pb-3 px-4 font-bold text-xs border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+                    setterTab === 'questions'
+                      ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                  }`}
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>Question Items ({questions.length})</span>
+                </button>
 
-                <div className="text-[11px] text-slate-500">
-                  Passing Marks: <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedExam.passingMarks}</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSetterTab('challenges')}
+                  className={`pb-3 px-4 font-bold text-xs border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+                    setterTab === 'challenges'
+                      ? 'border-amber-600 text-amber-600 dark:text-amber-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                  }`}
+                >
+                  <HelpCircle className="w-4 h-4" />
+                  <span>Question Challenges ({challenges.filter((c) => c.examId === selectedExam.id).length})</span>
+                  {challenges.filter((c) => c.examId === selectedExam.id && !c.setterDecision).length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold animate-pulse">
+                      {challenges.filter((c) => c.examId === selectedExam.id && !c.setterDecision).length} Pending
+                    </span>
+                  )}
+                </button>
               </div>
 
-              {/* Questions List */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  Question Items ({questions.length})
-                </h3>
+              {setterTab === 'questions' ? (
+                <>
+                  {/* Marks Summary Pill */}
+                  <div className="flex flex-wrap items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-750 border border-slate-200 dark:border-slate-700 text-xs">
+                    <div className="flex items-center space-x-4">
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400">Total Questions:</span>{' '}
+                        <span className="font-bold text-slate-900 dark:text-white">{questions.length}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400">Target Marks:</span>{' '}
+                        <span className="font-bold text-slate-900 dark:text-white">{selectedExam.totalMarks}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400">Allocated Sum:</span>{' '}
+                        <span
+                          className={`font-bold ${
+                            currentQuestionsMarksSum === selectedExam.totalMarks
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          {currentQuestionsMarksSum}
+                        </span>
+                      </div>
+                    </div>
 
-                {questions.length === 0 ? (
-                  <div className="py-12 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center space-y-3">
-                    <HelpCircle className="w-8 h-8 text-slate-400 mx-auto" />
-                    <p className="text-xs text-slate-500">
-                      This exam has no questions authored yet. Click "Add Question" to start.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={openAddQuestion}
-                      className="px-3.5 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-100"
-                    >
-                      + Add First Question
-                    </button>
+                    <div className="text-[11px] text-slate-500">
+                      Passing Marks: <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedExam.passingMarks}</span>
+                    </div>
                   </div>
-                ) : (
-                  questions.map((q, idx) => (
-                    <div
-                      key={q.id}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-750/40 hover:border-slate-300 dark:hover:border-slate-600 transition-all space-y-3"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-start space-x-3">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 font-bold text-xs flex items-center justify-center shrink-0">
-                            {idx + 1}
-                          </span>
-                          <div>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                                {q.type}
-                              </span>
-                              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                                {q.marks} Marks
-                              </span>
-                            </div>
-                            <p className="text-xs font-semibold text-slate-900 dark:text-white mt-1 leading-relaxed">
-                              {q.title}
-                            </p>
+
+                  {/* Attempt Rules & Question Pool Regulations Card */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50/70 via-purple-50/50 to-indigo-50/70 dark:from-indigo-950/30 dark:via-purple-950/20 dark:to-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center space-x-2 font-bold text-xs text-indigo-950 dark:text-indigo-200">
+                          <Settings className="w-4 h-4 text-indigo-600" />
+                          <span>Candidate Attempt Regulations & Question Pool Rules</span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                          Configure rules such as: <em>Out of 110 questions, candidate can appear in only 100 questions</em>, with specific compulsory questions.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <div className="flex items-center space-x-1.5 bg-white dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 text-xs">
+                          <label className="text-slate-500 font-medium">Max Questions to Attempt:</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max={questions.length || 200}
+                            placeholder={questions.length ? String(questions.length) : 'All'}
+                            value={maxAttemptInput}
+                            onChange={(e) => setMaxAttemptInput(e.target.value)}
+                            disabled={isViewOnlyAdmin}
+                            className="w-16 p-1 text-center font-bold text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-750 text-slate-900 dark:text-white"
+                          />
+                          <span className="text-slate-400">/ {questions.length}</span>
+                        </div>
+
+                        {!isViewOnlyAdmin && (
+                          <button
+                            type="button"
+                            onClick={handleSaveAttemptRules}
+                            disabled={savingAttemptRules}
+                            className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            {savingAttemptRules ? 'Saving...' : 'Save Rule'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Pool Status Summary Pills */}
+                    {(() => {
+                      const compulsoryQs = questions.filter((q) => q.isMandatory);
+                      const electiveQs = questions.filter((q) => !q.isMandatory);
+                      const maxAllowed = selectedExam.maxQuestionsToAttempt || questions.length;
+                      const electiveToPick = Math.max(0, maxAllowed - compulsoryQs.length);
+
+                      return (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
+                          <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                            <span className="text-[10px] text-slate-400 uppercase font-bold block">Total Question Pool</span>
+                            <span className="text-sm font-black text-slate-900 dark:text-white">{questions.length} Questions</span>
+                          </div>
+
+                          <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800">
+                            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 uppercase font-bold block">Max Candidate Attempt</span>
+                            <span className="text-sm font-black text-indigo-700 dark:text-indigo-300">
+                              {selectedExam.maxQuestionsToAttempt ? `${selectedExam.maxQuestionsToAttempt} Questions` : 'All Questions'}
+                            </span>
+                          </div>
+
+                          <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800">
+                            <span className="text-[10px] text-amber-700 dark:text-amber-400 uppercase font-bold block">Compulsory (Must Attend)</span>
+                            <span className="text-sm font-black text-amber-800 dark:text-amber-200">{compulsoryQs.length} Questions</span>
+                          </div>
+
+                          <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800">
+                            <span className="text-[10px] text-purple-700 dark:text-purple-400 uppercase font-bold block">Elective Pool Selection</span>
+                            <span className="text-sm font-black text-purple-800 dark:text-purple-200">
+                              Pick {electiveToPick} of {electiveQs.length}
+                            </span>
                           </div>
                         </div>
+                      );
+                    })()}
+                  </div>
 
-                        <div className="flex items-center space-x-1 shrink-0">
-                          {isViewOnlyAdmin ? (
-                            <span className="p-1.5 text-slate-400 flex items-center space-x-1 text-[11px]" title="Questions cannot be altered in Administrator view-only mode">
-                              <Lock className="w-3.5 h-3.5" />
-                              <span className="text-[10px]">Read-Only</span>
-                            </span>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => openEditQuestion(q)}
-                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-                                title="Edit Question"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteQuestion(q.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors"
-                                title="Delete Question"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </>
-                          )}
-                        </div>
+                  {/* Questions List Header with Import & Add Buttons */}
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Question Items ({questions.length})
+                    </h3>
+
+                    <div className="flex items-center space-x-2">
+                      {!isViewOnlyAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setImportModalOpen(true)}
+                          className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+                          title="Batch import MCQ & True/False questions from Excel (.xlsx) or CSV"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>Import from Excel / CSV</span>
+                        </button>
+                      )}
+
+                      {!isViewOnlyAdmin && (
+                        <button
+                          type="button"
+                          onClick={openAddQuestion}
+                          className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add Question</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {questions.length === 0 ? (
+                    <div className="py-12 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center space-y-3">
+                      <HelpCircle className="w-8 h-8 text-slate-400 mx-auto" />
+                      <p className="text-xs text-slate-500">
+                        This exam has no questions authored yet. Click "Add Question" or "Import from Excel / CSV" to start.
+                      </p>
+                      <div className="flex items-center justify-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => setImportModalOpen(true)}
+                          className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs flex items-center space-x-1.5 cursor-pointer"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>Import from Excel / CSV</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openAddQuestion}
+                          className="px-3.5 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-100"
+                        >
+                          + Add Single Question
+                        </button>
                       </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {questions.map((q, idx) => (
+                        <div
+                          key={q.id}
+                        className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-750/40 hover:border-slate-300 dark:hover:border-slate-600 transition-all space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start space-x-3">
+                            <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 font-bold text-xs flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                                  {q.type}
+                                </span>
+                                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                                  {q.marks} Marks
+                                </span>
+                                {q.isMandatory ? (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200 border border-amber-300 dark:border-amber-800 flex items-center space-x-1">
+                                    <Star className="w-2.5 h-2.5 fill-current text-amber-600" />
+                                    <span>COMPULSORY (MUST ATTEND)</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500">
+                                    Elective / Optional
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs font-semibold text-slate-900 dark:text-white mt-1 leading-relaxed">
+                                {q.title}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1 shrink-0">
+                            {isViewOnlyAdmin ? (
+                              <span className="p-1.5 text-slate-400 flex items-center space-x-1 text-[11px]" title="Questions cannot be altered in Administrator view-only mode">
+                                <Lock className="w-3.5 h-3.5" />
+                                <span className="text-[10px]">Read-Only</span>
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleQuestionMandatory(q)}
+                                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                    q.isMandatory
+                                      ? 'text-amber-600 bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100'
+                                      : 'text-slate-400 hover:text-amber-600 hover:bg-slate-100 dark:hover:bg-slate-700'
+                                  }`}
+                                  title={q.isMandatory ? 'Compulsory (Click to make Elective)' : 'Elective (Click to make Compulsory / Must Attend)'}
+                                >
+                                  <Star className={`w-4 h-4 ${q.isMandatory ? 'fill-current' : ''}`} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditQuestion(q)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+                                  title="Edit Question"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuestion(q.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete Question"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
 
                       {/* Question Details preview */}
                       {q.type === 'mcq' && q.options && (
@@ -714,10 +971,166 @@ export const PaperSetterPortal: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  ))
-                )}
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            /* Challenges Tab */
+            <div className="space-y-4">
+              {/* Setter Role Academic Notice */}
+              <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 flex items-start space-x-3 text-xs">
+                <BookOpen className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="font-bold text-indigo-950 dark:text-indigo-200">
+                    Paper Setter Role in Question Challenges
+                  </h4>
+                  <p className="text-indigo-900/80 dark:text-indigo-300/80 text-[11px] leading-relaxed">
+                    As the Exam Paper Setter who selected the correct answer key, you have an official role in reviewing candidates' challenges. You can recommend altering the answer key (which will re-score all candidates if approved), upholding the original answer, or recommending skipping a debatable question.
+                  </p>
+                </div>
               </div>
+
+              {(() => {
+                const examChallenges = challenges.filter((c) => c.examId === selectedExam.id);
+                if (examChallenges.length === 0) {
+                  return (
+                    <div className="py-12 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-center space-y-2">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+                      <h4 className="font-bold text-xs text-slate-700 dark:text-slate-300">
+                        No Challenges Lodged for this Examination
+                      </h4>
+                      <p className="text-slate-500 text-[11px]">
+                        Candidates have not challenged any questions in this examination yet.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {examChallenges.map((ch) => {
+                      const qObj = questions.find((q) => q.id === ch.questionId);
+
+                      return (
+                        <div
+                          key={ch.id}
+                          className="p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-750/50 space-y-4 text-xs"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-700">
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="font-bold text-slate-900 dark:text-white text-sm">
+                                  {ch.questionTitle}
+                                </span>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                                  {ch.questionMarks} Pts
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Challenged by: <span className="font-semibold text-slate-700 dark:text-slate-300">{ch.participantName}</span> ({ch.participantEmail})
+                              </p>
+                            </div>
+
+                            <div className="flex items-center space-x-2">
+                              {ch.setterDecision ? (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  ✓ Setter Reviewed: {ch.setterDecision.replace(/_/g, ' ')}
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 dark:border-amber-800 animate-pulse">
+                                  ⏳ Pending Paper Setter Review
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Keys Comparison */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
+                              <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                                Paper Setter's Original Correct Answer:
+                              </span>
+                              <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                                {qObj?.correctAnswer || '(Answer key in system)'}
+                              </span>
+                            </div>
+
+                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
+                              <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                                Candidate Submitted Response:
+                              </span>
+                              <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">
+                                {ch.candidateAnswer || '(Unattempted)'}
+                              </span>
+                              <span className="text-[10px] text-slate-500 block mt-1">
+                                Marks Awarded: {ch.originalMarksAwarded} / {ch.questionMarks} Pts
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Challenge Reason & Explanation */}
+                          <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-bold text-amber-950 dark:text-amber-200">
+                                Grounds: {ch.challengeReason.replace(/_/g, ' ').toUpperCase()}
+                              </span>
+                              <span className="text-slate-500 text-[10px]">
+                                Submitted {new Date(ch.submittedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <p className="text-slate-700 dark:text-slate-300 text-[11px] italic">
+                              "{ch.candidateExplanation}"
+                            </p>
+                            {ch.supportingReference && (
+                              <p className="text-[10px] text-slate-500">
+                                <strong>Academic Reference:</strong> {ch.supportingReference}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Setter Decision Summary if done */}
+                          {ch.setterDecision && (
+                            <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 text-[11px] space-y-1">
+                              <span className="font-bold text-indigo-950 dark:text-indigo-200">
+                                Paper Setter's Recorded Determination:
+                              </span>
+                              <p className="text-indigo-900/80 dark:text-indigo-300/80">
+                                Recommendation: <span className="font-bold uppercase">{ch.setterDecision.replace(/_/g, ' ')}</span>
+                                {ch.setterProposedAnswer && (
+                                  <span> • Revised Answer: <span className="font-mono font-bold">{ch.setterProposedAnswer}</span></span>
+                                )}
+                              </p>
+                              {ch.setterReviewNotes && (
+                                <p className="text-slate-600 dark:text-slate-400 italic">
+                                  Notes: "{ch.setterReviewNotes}"
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Actions */}
+                          <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-slate-700">
+                            {!isViewOnlyAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => setSetterReviewModalCh(ch)}
+                                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+                              >
+                                <HelpCircle className="w-3.5 h-3.5" />
+                                <span>{ch.setterDecision ? 'Update Setter Determination' : 'Review & Provide Setter Role Determination'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
+          )}
+        </div>
           ) : (
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center text-slate-400 text-xs">
               Select or create an exam on the left to start authoring questions.
@@ -835,6 +1248,32 @@ export const PaperSetterPortal: React.FC = () => {
                   onChange={(e) => setExamForm({ ...examForm, instructions: e.target.value })}
                   className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-750 text-slate-900 dark:text-white focus:outline-hidden font-mono text-[11px]"
                 />
+              </div>
+
+              {/* Candidate Attempt Limit (e.g. 100 out of 110) */}
+              <div className="p-3 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800">
+                <label className="block font-semibold text-slate-800 dark:text-slate-200 mb-1">
+                  Candidate Maximum Attempt Limit (Optional Rule)
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Leave empty for all questions (e.g. 100 out of 110)"
+                    value={examForm.maxQuestionsToAttempt ?? ''}
+                    onChange={(e) =>
+                      setExamForm({
+                        ...examForm,
+                        maxQuestionsToAttempt: e.target.value ? Number(e.target.value) : undefined,
+                      })
+                    }
+                    className="flex-1 p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-hidden"
+                  />
+                  <span className="text-slate-500 text-xs">Questions</span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  Example: If paper has 110 questions and limit is 100, candidate can appear in only 100 questions.
+                </p>
               </div>
 
               <div className="flex items-center space-x-2 pt-2">
@@ -1031,6 +1470,28 @@ export const PaperSetterPortal: React.FC = () => {
                 </div>
               )}
 
+              {/* Compulsory / Selective Mandatory Toggle */}
+              <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 flex items-start space-x-3">
+                <input
+                  type="checkbox"
+                  id="isMandatoryCheckbox"
+                  checked={questionForm.isMandatory}
+                  onChange={(e) => setQuestionForm({ ...questionForm, isMandatory: e.target.checked })}
+                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="isMandatoryCheckbox" className="cursor-pointer">
+                  <span className="font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-1.5">
+                    <span>★ Mark as Compulsory Question (Must Attend)</span>
+                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200 uppercase font-black">
+                      Mandatory
+                    </span>
+                  </span>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                    When checked, candidates MUST attend this question. It cannot be skipped under elective choice limits (e.g. out of 110 questions candidate can appear only in 100 questions).
+                  </p>
+                </label>
+              </div>
+
               <div className="flex items-center justify-end space-x-2 pt-4 border-t border-slate-100 dark:border-slate-700">
                 <button
                   type="button"
@@ -1062,6 +1523,40 @@ export const PaperSetterPortal: React.FC = () => {
         }}
         setterName={profile?.displayName || 'Exam Paper Setter'}
       />
+
+      {/* Setter Review Challenge Modal */}
+      {setterReviewModalCh && (
+        <SetterReviewChallengeModal
+          isOpen={true}
+          challenge={setterReviewModalCh}
+          setterId={profile?.uid || 'setter_unknown'}
+          setterName={profile?.displayName || 'Exam Paper Setter'}
+          onClose={() => setSetterReviewModalCh(null)}
+          onSuccess={async () => {
+            setSuccessNotice('Paper Setter academic determination submitted successfully!');
+            setTimeout(() => setSuccessNotice(null), 4000);
+            await loadExams();
+          }}
+        />
+      )}
+
+      {/* Import Questions from Excel (.xlsx/.xls) or CSV Modal */}
+      {selectedExam && (
+        <ImportQuestionsModal
+          isOpen={importModalOpen}
+          onClose={() => setImportModalOpen(false)}
+          examId={selectedExam.id}
+          examTitle={selectedExam.title}
+          currentQuestionsCount={questions.length}
+          onSuccess={async () => {
+            setSuccessNotice('MCQ and True/False questions successfully fetched and imported from spreadsheet!');
+            setTimeout(() => setSuccessNotice(null), 4500);
+            const qList = await examService.getQuestions(selectedExam.id);
+            setQuestions(qList);
+            await loadExams();
+          }}
+        />
+      )}
     </div>
   );
 };

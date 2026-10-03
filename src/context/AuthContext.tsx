@@ -33,7 +33,16 @@ interface AuthContextType {
   executeRoleSwitch: (targetRole: UserRole, passcode?: string) => Promise<boolean>;
 }
 
-const BOOTSTRAP_ADMIN_EMAIL = 'biswajyoti.sand@gmail.com';
+const BOOTSTRAP_ADMIN_EMAILS = [
+  'biswajyoti.sand@gmail.com',
+  'biswajyoti.office@gmail.com',
+];
+
+function isBootstrapAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return BOOTSTRAP_ADMIN_EMAILS.some((adminEmail) => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 const SESSION_STORAGE_KEY = 'online_exam_user_session';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -55,7 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchProfileForUser = async (u: User) => {
     try {
       let p = await examService.getUserProfile(u.uid);
-      const isSystemAdminEmail = u.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+      const isSystemAdminEmail = isBootstrapAdminEmail(u.email);
 
       if (!p) {
         // Initial setup for new user
@@ -84,7 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       persistSession(p);
     } catch (err) {
       console.warn('Network issue fetching user profile, using authenticated user identity:', err);
-      const isSystemAdminEmail = u.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+      const isSystemAdminEmail = isBootstrapAdminEmail(u.email);
       const fallback: UserProfile = {
         uid: u.uid,
         email: u.email || 'biswajyoti.sand@gmail.com',
@@ -253,7 +262,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setActiveRole = (role: UserRole) => {
     const isUserAdmin =
       profile?.role === 'admin' ||
-      user?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+      isBootstrapAdminEmail(user?.email);
 
     if (!isUserAdmin) {
       console.warn('Unauthorized role switch attempt rejected. Only the Administrator can switch portal views.');
@@ -297,7 +306,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Strict Rule: Except administrator no one can switch role.
     const isUserAdmin =
       profile?.role === 'admin' ||
-      user?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+      isBootstrapAdminEmail(user?.email);
 
     if (!isUserAdmin) {
       throw new Error('Access Denied: Only the Administrator is authorized to switch portal views.');
@@ -319,7 +328,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const isAdmin = profile?.role === 'admin' || user?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+  const isAdmin = profile?.role === 'admin' || isBootstrapAdminEmail(user?.email);
   const isAuthenticated = profile !== null || user !== null;
   const mustChangePassword = Boolean(profile?.mustChangePassword);
 

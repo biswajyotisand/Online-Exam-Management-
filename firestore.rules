@@ -14,7 +14,7 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        request.auth.token.email == 'biswajyoti.sand@gmail.com'
+        request.auth.token.email in ['biswajyoti.sand@gmail.com', 'biswajyoti.office@gmail.com']
       );
     }
 
@@ -55,6 +55,11 @@ service cloud.firestore {
 
     // System settings & passcodes
     match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
+
+    // Connection test probe
+    match /test/{testId} {
       allow read, write: if true;
     }
   }

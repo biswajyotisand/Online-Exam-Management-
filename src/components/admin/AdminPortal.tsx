@@ -62,12 +62,13 @@ import { LinkCandidateToExamModal } from './LinkCandidateToExamModal';
 import { AuthorizeResultsPublicationModal } from './AuthorizeResultsPublicationModal';
 import { AuthorizeChallengeModal } from './AuthorizeChallengeModal';
 import { ChallengeDetailsModal } from '../common/ChallengeDetailsModal';
+import { ExamScorecardsDashboard } from './ExamScorecardsDashboard';
 import { QuestionChallenge } from '../../types/exam';
 
 export const AdminPortal: React.FC = () => {
   const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState<
-    'exams' | 'overview' | 'participants' | 'paper_setters' | 'evaluators' | 'challenges' | 'security' | 'logs'
+    'exams' | 'overview' | 'participants' | 'paper_setters' | 'evaluators' | 'challenges' | 'scorecards' | 'security' | 'logs'
   >('exams');
 
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -425,6 +426,20 @@ export const AdminPortal: React.FC = () => {
               {challenges.filter((c) => c.status === 'forwarded_to_admin').length} Action Required
             </span>
           )}
+        </button>
+
+        {/* 6. Scorecards & Excel Export */}
+        <button
+          type="button"
+          onClick={() => setActiveTab('scorecards')}
+          className={`py-3 px-4 font-semibold text-xs border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap ${
+            activeTab === 'scorecards'
+              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400'
+          }`}
+        >
+          <Award className="w-4 h-4" />
+          <span>6. Scorecards & Excel Export</span>
         </button>
 
         {/* System Overview */}
@@ -2210,6 +2225,18 @@ export const AdminPortal: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {/* Tab: SCORECARDS & EXCEL EXPORT */}
+      {activeTab === 'scorecards' && (
+        <ExamScorecardsDashboard
+          exams={exams}
+          submissions={submissions}
+          users={users}
+          onRefresh={loadData}
+          adminName={profile?.displayName || 'Administrator'}
+          adminId={profile?.uid || 'admin'}
+        />
       )}
 
       {/* Tab 6: SECURITY PASSCODES */}

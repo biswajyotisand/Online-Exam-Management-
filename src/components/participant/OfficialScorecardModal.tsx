@@ -43,6 +43,14 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [challengeQuestionModalQ, setChallengeQuestionModalQ] = useState<Question | null>(null);
   const [viewChallengeModalCh, setViewChallengeModalCh] = useState<QuestionChallenge | null>(null);
+  const [batchChallengeModalOpen, setBatchChallengeModalOpen] = useState(false);
+  const [scorecardViewMode, setScorecardViewMode] = useState<'current' | 'before_challenge'>('current');
+
+  const isChallengeDeadlinePassed = exam?.challengeDeadline
+    ? new Date() > new Date(exam.challengeDeadline)
+    : false;
+  const isChallengeSubmitted = Boolean(submission?.challengeSubmitted);
+  const hasBeforeChallengeSnapshot = Boolean(submission?.beforeChallengeSnapshot);
 
   const loadData = () => {
     if (submission) {
@@ -69,10 +77,19 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
 
   if (!isOpen || !submission || !exam) return null;
 
-  const totalScore = submission.totalScore ?? 0;
-  const maxScore = submission.maxScore ?? exam.totalMarks;
-  const percentage = submission.percentage ?? (maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0);
-  const isPassed = submission.passed ?? (totalScore >= exam.passingMarks);
+  const isViewingBefore = scorecardViewMode === 'before_challenge' && hasBeforeChallengeSnapshot;
+  const snap = submission.beforeChallengeSnapshot;
+
+  const totalScore = isViewingBefore ? (snap?.totalScore ?? 0) : (submission.totalScore ?? 0);
+  const maxScore = isViewingBefore ? (snap?.totalMarks ?? exam.totalMarks) : (submission.maxScore ?? exam.totalMarks);
+  const passingMarks = isViewingBefore ? (snap?.passingMarks ?? exam.passingMarks) : exam.passingMarks;
+  const percentage = isViewingBefore
+    ? (snap?.percentage ?? 0)
+    : (submission.percentage ?? (maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0));
+  const isPassed = isViewingBefore
+    ? (snap?.passed ?? (totalScore >= passingMarks))
+    : (submission.passed ?? (totalScore >= passingMarks));
+  const activeAnswers = isViewingBefore ? (snap?.answers || {}) : (submission.answers || {});
 
   const handlePrint = () => {
     window.print();
@@ -82,7 +99,7 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in overflow-y-auto">
       <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-3xl w-full shadow-2xl border border-slate-200 dark:border-slate-800 my-8 overflow-hidden print:m-0 print:p-0 print:border-none print:shadow-none print:max-w-none">
         {/* Header - Hidden on Print */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850 print:hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850 gap-3 print:hidden">
           <div className="flex items-center space-x-2.5">
             <span className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <Award className="w-5 h-5" />
@@ -97,10 +114,36 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            {hasBeforeChallengeSnapshot && (
+              <div className="flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setScorecardViewMode('current')}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer ${
+                    scorecardViewMode === 'current'
+                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Post-Resolution
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScorecardViewMode('before_challenge')}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer ${
+                    scorecardViewMode === 'before_challenge'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Pre-Challenge Baseline
+                </button>
+              </div>
+            )}
             <button
               type="button"
               onClick={handlePrint}
-              className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-colors"
+              className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Print Scorecard</span>
@@ -108,12 +151,33 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
+
+        {/* Historical Snapshot Banner if viewing before challenge */}
+        {isViewingBefore && snap && (
+          <div className="p-3.5 bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex items-center justify-between gap-2 px-6 print:hidden">
+            <div className="flex items-center space-x-2">
+              <span className="font-bold uppercase tracking-wider text-[10px] px-2 py-0.5 rounded bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-100">
+                Pre-Challenge Audit Baseline
+              </span>
+              <span>
+                Snapshot recorded on <strong>{new Date(snap.capturedAt).toLocaleString()}</strong> prior to challenge resolution.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setScorecardViewMode('current')}
+              className="text-amber-700 dark:text-amber-300 font-bold underline cursor-pointer text-[11px]"
+            >
+              Switch to Post-Resolution Scorecard →
+            </button>
+          </div>
+        )}
 
         {/* Printable Scorecard Document */}
         <div className="p-6 sm:p-8 space-y-6 text-slate-900 dark:text-slate-100 print:text-black">
@@ -220,6 +284,57 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
             </div>
           )}
 
+          {/* Academic Question Challenge Window Status Banner */}
+          {examService.isResultPublishedForExam(exam) && (
+            <div className="p-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs print:hidden">
+              <div className="flex items-start space-x-3">
+                <span className="p-2 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0">
+                  <HelpCircle className="w-5 h-5" />
+                </span>
+                <div className="space-y-0.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-bold text-amber-950 dark:text-amber-200">
+                      Academic Question Challenge Window
+                    </span>
+                    {isChallengeSubmitted ? (
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 font-bold text-[10px]">
+                        ✓ Challenges Submitted (Single Session Locked)
+                      </span>
+                    ) : isChallengeDeadlinePassed ? (
+                      <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 font-bold text-[10px]">
+                        🔒 Window Expired
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-bold text-[10px]">
+                        Active Now
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-amber-900/80 dark:text-amber-300/80">
+                    {exam.challengeDeadline ? (
+                      <>
+                        Scheduled Cutoff: <span className="font-semibold">{new Date(exam.challengeDeadline).toLocaleString()}</span>. Under regulations, candidates can challenge any answer(s) of question(s) at a single time.
+                      </>
+                    ) : (
+                      'Challenge window is open for academic review of questions and answer keys.'
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {!isChallengeSubmitted && !isChallengeDeadlinePassed && (
+                <button
+                  type="button"
+                  onClick={() => setBatchChallengeModalOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-md shadow-amber-900/20 transition-all self-start sm:self-auto shrink-0 flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <HelpCircle className="w-4 h-4" />
+                  <span>Challenge Questions (Single Submission)</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Detailed Question Evaluation Sheet */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200 dark:border-slate-800 pb-2">
@@ -233,7 +348,7 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
             ) : (
               <div className="space-y-3">
                 {questions.map((q, idx) => {
-                  const studentAns = submission.answers?.[q.id];
+                  const studentAns = activeAnswers?.[q.id];
                   const marksAwarded = studentAns?.marksObtained ?? 0;
                   const feedback = studentAns?.evaluatorFeedback;
 
@@ -247,8 +362,17 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
                           <span className="font-bold text-slate-900 dark:text-white">
                             Q{idx + 1}. {q.title}
                           </span>
-                          <div className="text-[10px] text-slate-400 uppercase font-semibold">
-                            Type: {q.type} • Weight: {q.marks} Marks
+                          <div className="text-[10px] text-slate-400 uppercase font-semibold flex items-center space-x-1.5 mt-0.5">
+                            <span>Type: {q.type} • Weight: {q.marks} Marks</span>
+                            {q.isMandatory ? (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-800 font-bold">
+                                ★ Compulsory (Must Attend)
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-750 text-slate-500 font-medium">
+                                Elective
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -363,15 +487,21 @@ export const OfficialScorecardModal: React.FC<OfficialScorecardModalProps> = ({
         </div>
       </div>
 
-      {/* Challenge Question Modal */}
-      {challengeQuestionModalQ && (
+      {/* Challenge Question Modal (Individual or Batch) */}
+      {(challengeQuestionModalQ || batchChallengeModalOpen) && (
         <ChallengeQuestionModal
           isOpen={true}
           question={challengeQuestionModalQ}
+          allQuestions={questions}
           submission={submission}
           exam={exam}
-          onClose={() => setChallengeQuestionModalQ(null)}
+          onClose={() => {
+            setChallengeQuestionModalQ(null);
+            setBatchChallengeModalOpen(false);
+          }}
           onSuccess={() => {
+            setChallengeQuestionModalQ(null);
+            setBatchChallengeModalOpen(false);
             loadData();
             if (onRefresh) onRefresh();
           }}
