@@ -1,0 +1,140 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing authenticated user info and assigned RBAC role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["admin", "paper_setter", "evaluator", "participant"] },
+        "department": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrative authority mapping document for exists(/admins/$(uid)) checks",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 256 },
+        "assignedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["email", "assignedAt"]
+    },
+    "Exam": {
+      "title": "Exam",
+      "description": "Examination configuration created by paper setters and administered to students",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string", "maxLength": 2048 },
+        "subject": { "type": "string", "maxLength": 128 },
+        "setterId": { "type": "string", "maxLength": 128 },
+        "setterName": { "type": "string", "maxLength": 128 },
+        "evaluatorId": { "type": "string", "maxLength": 128 },
+        "evaluatorName": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["draft", "published", "in_progress", "completed", "archived"] },
+        "durationMinutes": { "type": "number" },
+        "totalMarks": { "type": "number" },
+        "passingMarks": { "type": "number" },
+        "questionsCount": { "type": "number" },
+        "instructions": { "type": "string", "maxLength": 4096 },
+        "proctoringEnabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "subject", "setterId", "setterName", "status", "durationMinutes", "totalMarks", "createdAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Question belonging to an examination",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "examId": { "type": "string", "maxLength": 128 },
+        "order": { "type": "number" },
+        "title": { "type": "string", "maxLength": 4096 },
+        "type": { "type": "string", "enum": ["mcq", "subjective", "boolean", "code"] },
+        "options": { "type": "array" },
+        "correctAnswer": { "type": "string", "maxLength": 4096 },
+        "marks": { "type": "number" },
+        "rubric": { "type": "string", "maxLength": 2048 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "examId", "order", "title", "type", "marks"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "Participant exam answers, proctoring metrics, and evaluator scorecards",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "examId": { "type": "string", "maxLength": 128 },
+        "examTitle": { "type": "string", "maxLength": 256 },
+        "participantId": { "type": "string", "maxLength": 128 },
+        "participantName": { "type": "string", "maxLength": 128 },
+        "participantEmail": { "type": "string", "maxLength": 256 },
+        "status": { "type": "string", "enum": ["in_progress", "submitted", "evaluated"] },
+        "answers": { "type": "object" },
+        "totalScore": { "type": "number" },
+        "maxScore": { "type": "number" },
+        "percentage": { "type": "number" },
+        "passed": { "type": "boolean" },
+        "tabSwitchCount": { "type": "number" },
+        "evaluatorId": { "type": "string", "maxLength": 128 },
+        "evaluatorNotes": { "type": "string", "maxLength": 2048 },
+        "startedAt": { "type": "string", "maxLength": 64 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "evaluatedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "examId", "participantId", "participantName", "status", "startedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative audit log for system monitoring and compliance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 256 },
+        "details": { "type": "string", "maxLength": 2048 },
+        "timestamp": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "action", "userId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile with role assignment"
+    },
+    "/admins/{userId}": {
+      "schema": "Admin",
+      "description": "Admin identity document for RBAC exists() verification"
+    },
+    "/exams/{examId}": {
+      "schema": "Exam",
+      "description": "Exams created by paper setters, published for participants, and managed by admins"
+    },
+    "/exams/{examId}/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Questions belonging to an exam"
+    },
+    "/submissions/{submissionId}": {
+      "schema": "Submission",
+      "description": "Participant exam answers, proctoring metrics, and evaluator scorecards"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System event audit trail for administrative tracking"
+    }
+  }
+}

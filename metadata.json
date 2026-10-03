@@ -1,0 +1,6 @@
+{
+  "name": "ExamForge - Secure Multi-Role Online Examination Portal",
+  "description": "Enterprise-grade online examination platform with dedicated frontends for Administrators, Exam Paper Setters, Evaluators, and Participants.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

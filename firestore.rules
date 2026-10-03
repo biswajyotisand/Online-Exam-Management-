@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'biswajyoti.sand@gmail.com'
+      );
+    }
+
+    // Admins registry
+    match /admins/{userId} {
+      allow read, write: if true;
+    }
+
+    // Users & RBAC profiles
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Exams catalog (publicly readable so candidates and setters can view available tests)
+    match /exams/{examId} {
+      allow read, write: if true;
+
+      // Questions subcollection
+      match /questions/{questionId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Submissions collection (answers, scoring, and evaluations)
+    match /submissions/{submissionId} {
+      allow read, write: if true;
+    }
+
+    // Question challenges & candidate re-evaluation appeals
+    match /challenges/{challengeId} {
+      allow read, write: if true;
+    }
+
+    // System audit logs
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // System settings & passcodes
+    match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
+  }
+}
