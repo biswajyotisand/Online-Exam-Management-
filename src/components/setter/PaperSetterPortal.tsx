@@ -26,11 +26,13 @@ import {
   Upload,
   CheckSquare,
   Settings,
-  Layers
+  Layers,
+  ShieldCheck
 } from 'lucide-react';
 import { ProposeScheduleModal } from './ProposeScheduleModal';
 import { SetterReviewChallengeModal } from './SetterReviewChallengeModal';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
+import { EditExamModal } from './EditExamModal';
 import { QuestionChallenge } from '../../types/exam';
 
 export const PaperSetterPortal: React.FC = () => {
@@ -38,12 +40,14 @@ export const PaperSetterPortal: React.FC = () => {
   const isViewOnlyAdmin = (isAdmin || profile?.role === 'admin') && activeRole === 'paper_setter';
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
+  const isExamAuthorized = selectedExam?.scheduleStatus === 'schedule_authorized';
   const [questions, setQuestions] = useState<Question[]>([]);
   const [challenges, setChallenges] = useState<QuestionChallenge[]>([]);
   const [setterReviewModalCh, setSetterReviewModalCh] = useState<QuestionChallenge | null>(null);
   const [setterTab, setSetterTab] = useState<'questions' | 'challenges'>('questions');
   const [loading, setLoading] = useState(true);
   const [examModalOpen, setExamModalOpen] = useState(false);
+  const [editExamModalOpen, setEditExamModalOpen] = useState(false);
   const [questionModalOpen, setQuestionModalOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
@@ -66,6 +70,8 @@ export const PaperSetterPortal: React.FC = () => {
     maxQuestionsToAttempt: undefined as number | undefined,
     instructions: '1. Attempt all questions.\n2. Do not switch tabs during examination.\n3. Verify all answers before final submission.',
     proctoringEnabled: true,
+    negativeMarkingEnabled: false,
+    negativeMarksPerQuestion: '0.25',
   });
 
   // Form states for question
@@ -144,6 +150,10 @@ export const PaperSetterPortal: React.FC = () => {
       setErrorNotice('Access Denied: Administrator is in view-only mode.');
       return;
     }
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator. Attempt regulations are locked.');
+      return;
+    }
     try {
       setSavingAttemptRules(true);
       const val = maxAttemptInput.trim() ? Number(maxAttemptInput) : null;
@@ -172,6 +182,10 @@ export const PaperSetterPortal: React.FC = () => {
 
   const handleToggleQuestionMandatory = async (q: Question) => {
     if (isViewOnlyAdmin) return;
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator and is sealed.');
+      return;
+    }
     try {
       const updatedQ: Question = {
         ...q,
@@ -198,6 +212,20 @@ export const PaperSetterPortal: React.FC = () => {
       return;
     }
 
+    let parsedNegMarks: number | undefined = undefined;
+    if (examForm.negativeMarkingEnabled) {
+      const val = Number(examForm.negativeMarksPerQuestion);
+      if (isNaN(val) || val <= 0) {
+        setErrorNotice('Please specify a valid positive deduction amount for negative marking (e.g. 0.25, 0.33, 0.5, 1).');
+        return;
+      }
+      if (val > Number(examForm.totalMarks)) {
+        setErrorNotice(`Negative mark deduction (${val}) cannot exceed total marks (${examForm.totalMarks}).`);
+        return;
+      }
+      parsedNegMarks = val;
+    }
+
     try {
       const newId = 'exam_' + Date.now().toString(36);
       const newExam: Exam = {
@@ -215,6 +243,8 @@ export const PaperSetterPortal: React.FC = () => {
         questionsCount: 0,
         instructions: examForm.instructions,
         proctoringEnabled: examForm.proctoringEnabled,
+        negativeMarkingEnabled: examForm.negativeMarkingEnabled,
+        negativeMarksPerQuestion: examForm.negativeMarkingEnabled ? parsedNegMarks : undefined,
         createdAt: new Date().toISOString(),
       };
 
@@ -230,10 +260,12 @@ export const PaperSetterPortal: React.FC = () => {
         maxQuestionsToAttempt: undefined,
         instructions: '1. Attempt all questions.\n2. Do not switch tabs during examination.\n3. Verify all answers before final submission.',
         proctoringEnabled: true,
+        negativeMarkingEnabled: false,
+        negativeMarksPerQuestion: '0.25',
       });
 
-      setSuccessNotice('Exam draft created successfully!');
-      setTimeout(() => setSuccessNotice(null), 3000);
+      setSuccessNotice('Exam draft created successfully! Click "Click to manage" to edit exam time, name, syllabus, etc.');
+      setTimeout(() => setSuccessNotice(null), 4000);
       await loadExams();
       setSelectedExam(newExam);
       setQuestions([]);
@@ -245,6 +277,10 @@ export const PaperSetterPortal: React.FC = () => {
   const openAddQuestion = () => {
     if (isViewOnlyAdmin) {
       setErrorNotice('Access Denied: Administrator is in view-only mode and cannot add questions.');
+      return;
+    }
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator. No new questions can be added.');
       return;
     }
     setEditingQuestion(null);
@@ -267,6 +303,10 @@ export const PaperSetterPortal: React.FC = () => {
       setErrorNotice('Access Denied: Administrator is in view-only mode and cannot alter questions.');
       return;
     }
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator. Question items are sealed.');
+      return;
+    }
     setEditingQuestion(q);
     setQuestionForm({
       title: q.title,
@@ -286,6 +326,10 @@ export const PaperSetterPortal: React.FC = () => {
     e.preventDefault();
     if (isViewOnlyAdmin) {
       setErrorNotice('Access Denied: Administrator is in view-only mode and cannot save questions.');
+      return;
+    }
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator and is sealed.');
       return;
     }
     if (!selectedExam) return;
@@ -347,6 +391,10 @@ export const PaperSetterPortal: React.FC = () => {
       setErrorNotice('Access Denied: Administrator is in view-only mode and cannot delete questions.');
       return;
     }
+    if (isExamAuthorized) {
+      setErrorNotice('Action Denied: This examination paper has been finally authorised by the Administrator. Questions cannot be deleted.');
+      return;
+    }
     if (!selectedExam) return;
     if (!confirm('Are you sure you want to delete this question?')) return;
     try {
@@ -373,15 +421,23 @@ export const PaperSetterPortal: React.FC = () => {
       return;
     }
 
+    if (!selectedExam.scheduledStartTime) {
+      setErrorNotice(
+        'Paper Setter cannot publish an exam until the date & time when the exam will go live is set. Please configure the Live Schedule Window below.'
+      );
+      return;
+    }
+
     try {
       await examService.updateExam(selectedExam.id, {
         status: 'published',
+        scheduleStatus: selectedExam.scheduleStatus || 'schedule_proposed',
         totalMarks: currentSum,
         questionsCount: questions.length,
       });
       setSelectedExam((prev) => (prev ? { ...prev, status: 'published', totalMarks: currentSum } : null));
-      setSuccessNotice('Exam is now PUBLISHED and live for student participants!');
-      setTimeout(() => setSuccessNotice(null), 4000);
+      setSuccessNotice('Exam Paper Forwarded to Administrator for authorisation.');
+      setTimeout(() => setSuccessNotice(null), 5000);
       await loadExams();
     } catch (err: any) {
       setErrorNotice(err?.message || 'Failed to publish exam');
@@ -460,9 +516,6 @@ export const PaperSetterPortal: React.FC = () => {
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Examination Papers ({exams.length})
               </h2>
-              <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold">
-                Click to manage
-              </span>
             </div>
 
             <div className="space-y-2">
@@ -514,6 +567,29 @@ export const PaperSetterPortal: React.FC = () => {
         <div className="lg:col-span-8 space-y-4">
           {selectedExam ? (
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 shadow-xs space-y-6">
+              {/* Institutional Authorization Sealed Banner */}
+              {isExamAuthorized && (
+                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-950 dark:text-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                  <div className="flex items-center space-x-3">
+                    <span className="p-2.5 rounded-xl bg-emerald-600 text-white shrink-0 shadow-xs">
+                      <ShieldCheck className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <span className="font-extrabold text-sm block text-emerald-900 dark:text-emerald-100">
+                        Final Institutional Authorization Completed (Paper Sealed)
+                      </span>
+                      <span className="text-[11px] text-emerald-800 dark:text-emerald-300">
+                        This question paper was officially authorised by the Administrator on {selectedExam.scheduleAuthorizedAt ? new Date(selectedExam.scheduleAuthorizedAt).toLocaleString() : 'scheduled date'}. All questions, syllabus, duration, marks, instructions, and candidate attempt rules are permanently sealed and cannot be altered.
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider shrink-0 self-start sm:self-auto flex items-center space-x-1">
+                    <Lock className="w-3 h-3" />
+                    <span>Locked</span>
+                  </span>
+                </div>
+              )}
+
               {/* Exam Info Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-5 border-b border-slate-200 dark:border-slate-700 gap-4">
                 <div>
@@ -540,21 +616,30 @@ export const PaperSetterPortal: React.FC = () => {
                       <Lock className="w-3.5 h-3.5" />
                       <span>Questions View-Only</span>
                     </span>
+                  ) : isExamAuthorized ? (
+                    <span
+                      className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-750 text-slate-500 dark:text-slate-400 text-xs font-bold border border-slate-200 dark:border-slate-700 cursor-not-allowed"
+                      title="Examination paper is officially authorised by Administrator and locked against alterations."
+                    >
+                      <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Paper Authorised (Locked)</span>
+                    </span>
                   ) : (
                     <>
                       <button
                         type="button"
-                        onClick={() => setScheduleModalOpen(true)}
-                        className="flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-100 transition-all"
+                        onClick={() => setEditExamModalOpen(true)}
+                        className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer"
+                        title="Click to manage: Edit exam time, name, syllabus, marks, instructions"
                       >
-                        <Calendar className="w-4 h-4" />
-                        <span>Live Schedule</span>
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Click to manage</span>
                       </button>
                       {selectedExam.status === 'draft' && (
                         <button
                           type="button"
                           onClick={handlePublishExam}
-                          className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-all"
+                          className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
                         >
                           <FileCheck className="w-4 h-4" />
                           <span>Publish Exam</span>
@@ -572,32 +657,6 @@ export const PaperSetterPortal: React.FC = () => {
                   )}
                 </div>
               </div>
-
-              {/* Mandatory Action Banner: Set Live Date & Time */}
-              {!isViewOnlyAdmin && !selectedExam.scheduledStartTime && (
-                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center space-x-2.5">
-                    <span className="p-2 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                      <Calendar className="w-5 h-5 text-amber-600" />
-                    </span>
-                    <div>
-                      <h4 className="font-bold text-amber-900 dark:text-amber-200">
-                        Action Required: Put Live Date & Time for Participants
-                      </h4>
-                      <p className="text-amber-800/80 dark:text-amber-300/80 text-[11px] mt-0.5">
-                        For this examination, the Paper Setter must put the date & time when the exam will go live for participants. The Administrator will authorize or alter the schedule.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setScheduleModalOpen(true)}
-                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-md shadow-amber-900/20 shrink-0"
-                  >
-                    + Put Live Date & Time
-                  </button>
-                </div>
-              )}
 
               {/* Live Schedule Status Card */}
               <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-750 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -640,13 +699,23 @@ export const PaperSetterPortal: React.FC = () => {
                 </div>
 
                 {!isViewOnlyAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => setScheduleModalOpen(true)}
-                    className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-xs self-start sm:self-auto shrink-0"
-                  >
-                    {selectedExam.scheduledStartTime ? 'Change Live Date & Time' : 'Set Live Date & Time'}
-                  </button>
+                  isExamAuthorized ? (
+                    <span
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-750 text-slate-500 dark:text-slate-400 text-xs font-bold border border-slate-200 dark:border-slate-700 flex items-center space-x-1.5 cursor-not-allowed"
+                      title="Schedule has been officially authorised by Administrator and is sealed."
+                    >
+                      <Lock className="w-3 h-3 text-emerald-600" />
+                      <span>Schedule Sealed</span>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setScheduleModalOpen(true)}
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-xs self-start sm:self-auto shrink-0"
+                    >
+                      {selectedExam.scheduledStartTime ? 'Change Live Date & Time' : 'Set Live Date & Time'}
+                    </button>
+                  )
                 )}
               </div>
 
@@ -709,6 +778,16 @@ export const PaperSetterPortal: React.FC = () => {
                           {currentQuestionsMarksSum}
                         </span>
                       </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400">Negative Marking:</span>{' '}
+                        {selectedExam.negativeMarkingEnabled ? (
+                          <span className="font-bold text-rose-600 dark:text-rose-400">
+                            Yes (-{selectedExam.negativeMarksPerQuestion || '0.25'})
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-slate-500">None</span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="text-[11px] text-slate-500">
@@ -739,21 +818,31 @@ export const PaperSetterPortal: React.FC = () => {
                             placeholder={questions.length ? String(questions.length) : 'All'}
                             value={maxAttemptInput}
                             onChange={(e) => setMaxAttemptInput(e.target.value)}
-                            disabled={isViewOnlyAdmin}
-                            className="w-16 p-1 text-center font-bold text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-750 text-slate-900 dark:text-white"
+                            disabled={isViewOnlyAdmin || isExamAuthorized}
+                            className="w-16 p-1 text-center font-bold text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-750 text-slate-900 dark:text-white disabled:opacity-60"
                           />
                           <span className="text-slate-400">/ {questions.length}</span>
                         </div>
 
                         {!isViewOnlyAdmin && (
-                          <button
-                            type="button"
-                            onClick={handleSaveAttemptRules}
-                            disabled={savingAttemptRules}
-                            className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-                          >
-                            {savingAttemptRules ? 'Saving...' : 'Save Rule'}
-                          </button>
+                          isExamAuthorized ? (
+                            <span
+                              className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-750 text-slate-500 dark:text-slate-400 text-xs font-semibold flex items-center space-x-1.5 border border-slate-200 dark:border-slate-700 cursor-not-allowed"
+                              title="Attempt regulations are locked following final Administrator authorization"
+                            >
+                              <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Rule Locked</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleSaveAttemptRules}
+                              disabled={savingAttemptRules}
+                              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              {savingAttemptRules ? 'Saving...' : 'Save Rule'}
+                            </button>
+                          )
                         )}
                       </div>
                     </div>
@@ -802,27 +891,36 @@ export const PaperSetterPortal: React.FC = () => {
                     </h3>
 
                     <div className="flex items-center space-x-2">
-                      {!isViewOnlyAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => setImportModalOpen(true)}
-                          className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
-                          title="Batch import MCQ & True/False questions from Excel (.xlsx) or CSV"
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                          <span>Import from Excel / CSV</span>
-                        </button>
-                      )}
+                      {isExamAuthorized ? (
+                        <span className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800/80 font-bold text-xs flex items-center space-x-1.5">
+                          <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Authorised Paper: Questions Locked</span>
+                        </span>
+                      ) : (
+                        <>
+                          {!isViewOnlyAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => setImportModalOpen(true)}
+                              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+                              title="Batch import MCQ & True/False questions from Excel (.xlsx) or CSV"
+                            >
+                              <FileSpreadsheet className="w-3.5 h-3.5" />
+                              <span>Import from Excel / CSV</span>
+                            </button>
+                          )}
 
-                      {!isViewOnlyAdmin && (
-                        <button
-                          type="button"
-                          onClick={openAddQuestion}
-                          className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Add Question</span>
-                        </button>
+                          {!isViewOnlyAdmin && (
+                            <button
+                              type="button"
+                              onClick={openAddQuestion}
+                              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Add Question</span>
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -893,6 +991,14 @@ export const PaperSetterPortal: React.FC = () => {
                               <span className="p-1.5 text-slate-400 flex items-center space-x-1 text-[11px]" title="Questions cannot be altered in Administrator view-only mode">
                                 <Lock className="w-3.5 h-3.5" />
                                 <span className="text-[10px]">Read-Only</span>
+                              </span>
+                            ) : isExamAuthorized ? (
+                              <span
+                                className="px-2.5 py-1 text-slate-500 dark:text-slate-400 flex items-center space-x-1 text-[11px] rounded-lg bg-slate-100 dark:bg-slate-750 border border-slate-200 dark:border-slate-700"
+                                title="This question cannot be altered because the exam paper has been officially authorised by the Administrator"
+                              >
+                                <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                                <span className="text-[10px] font-bold">Sealed</span>
                               </span>
                             ) : (
                               <>
@@ -1223,6 +1329,63 @@ export const PaperSetterPortal: React.FC = () => {
                     className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-750 text-slate-900 dark:text-white focus:outline-hidden"
                   />
                 </div>
+              </div>
+
+              {/* Negative Marking Selection */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-750/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Negative Marking *
+                    </label>
+                    <select
+                      value={examForm.negativeMarkingEnabled ? 'yes' : 'no'}
+                      onChange={(e) =>
+                        setExamForm({ ...examForm, negativeMarkingEnabled: e.target.value === 'yes' })
+                      }
+                      className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-semibold focus:outline-hidden"
+                    >
+                      <option value="no">No (No deduction for wrong answers)</option>
+                      <option value="yes">Yes (Deduct marks for wrong answers)</option>
+                    </select>
+                  </div>
+
+                  {examForm.negativeMarkingEnabled ? (
+                    <div className="animate-in fade-in">
+                      <label className="block font-semibold text-rose-700 dark:text-rose-300 mb-1">
+                        Deduction per Wrong Answer *
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0.01"
+                          max={examForm.totalMarks}
+                          required
+                          placeholder="e.g. 0.25, 0.33, 0.5, 1"
+                          value={examForm.negativeMarksPerQuestion}
+                          onChange={(e) =>
+                            setExamForm({ ...examForm, negativeMarksPerQuestion: e.target.value })
+                          }
+                          className="w-full pl-3 pr-24 py-2 rounded-xl border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-bold focus:outline-hidden"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-rose-600 dark:text-rose-400 pointer-events-none">
+                          marks / wrong
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center text-[11px] text-slate-500 pt-4">
+                      Standard evaluation: Incorrect answers award 0 marks without penalty.
+                    </div>
+                  )}
+                </div>
+
+                {examForm.negativeMarkingEnabled && (
+                  <p className="text-[10px] text-rose-600 dark:text-rose-400">
+                    ⚠️ Negative marking: For each wrong answer, {examForm.negativeMarksPerQuestion || '0'} mark will be deducted. Unattempted questions incur 0 deduction.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1557,6 +1720,19 @@ export const PaperSetterPortal: React.FC = () => {
           }}
         />
       )}
+
+      {/* Edit Exam Details Modal */}
+      <EditExamModal
+        isOpen={editExamModalOpen}
+        exam={selectedExam}
+        onClose={() => setEditExamModalOpen(false)}
+        onSuccess={async (updatedExam) => {
+          setSelectedExam(updatedExam);
+          setSuccessNotice(`Exam "${updatedExam.title}" details updated successfully!`);
+          setTimeout(() => setSuccessNotice(null), 4000);
+          await loadExams();
+        }}
+      />
     </div>
   );
 };

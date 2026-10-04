@@ -59,10 +59,16 @@ export const AuthGateway: React.FC = () => {
     setErrorMessage(null);
     try {
       setSubmitting(true);
-      await signInWithGoogle();
+      const success = await signInWithGoogle();
+      if (!success) {
+        return;
+      }
     } catch (err: any) {
-      if (!err.message?.includes('closed-by-user')) {
-        setErrorMessage('Google authentication could not be completed.');
+      if (
+        !err?.message?.includes('closed-by-user') &&
+        !err?.message?.includes('cancelled')
+      ) {
+        setErrorMessage(err.message || 'Google authentication could not be completed.');
       }
     } finally {
       setSubmitting(false);

@@ -47,6 +47,8 @@ export const GenerateExamModal: React.FC<GenerateExamModalProps> = ({
     '1. Attempt all questions within the allocated duration.\n2. Do not switch tabs or minimize window during proctored assessment.\n3. Upon completion, response receipt slip will be generated for verification.'
   );
   const [proctoringEnabled, setProctoringEnabled] = useState(true);
+  const [negativeMarkingEnabled, setNegativeMarkingEnabled] = useState(false);
+  const [negativeMarksPerQuestion, setNegativeMarksPerQuestion] = useState('0.25');
 
   // Role Allocation State
   const [selectedSetterId, setSelectedSetterId] = useState(
@@ -99,6 +101,22 @@ export const GenerateExamModal: React.FC<GenerateExamModalProps> = ({
       return;
     }
 
+    let parsedNegMarks: number | undefined = undefined;
+    if (negativeMarkingEnabled) {
+      const val = Number(negativeMarksPerQuestion);
+      if (isNaN(val) || val <= 0) {
+        setError('Please specify a valid positive deduction amount for negative marking (e.g. 0.25, 0.33, 0.5, 1).');
+        setStep(1);
+        return;
+      }
+      if (val > totalMarks) {
+        setError(`Negative mark deduction (${val}) cannot exceed target total marks (${totalMarks}).`);
+        setStep(1);
+        return;
+      }
+      parsedNegMarks = val;
+    }
+
     const setterObj = paperSetters.find((s) => s.uid === selectedSetterId);
     const evaluatorObj = evaluators.find((e) => e.uid === selectedEvaluatorId);
 
@@ -123,6 +141,8 @@ export const GenerateExamModal: React.FC<GenerateExamModalProps> = ({
         questionsCount: 0,
         instructions: instructions.trim(),
         proctoringEnabled,
+        negativeMarkingEnabled,
+        negativeMarksPerQuestion: negativeMarkingEnabled ? parsedNegMarks : undefined,
         scheduleStatus: 'unscheduled',
         createdAt: new Date().toISOString(),
       };
@@ -273,6 +293,59 @@ export const GenerateExamModal: React.FC<GenerateExamModalProps> = ({
                     className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              {/* Negative Marking Configuration */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-750/70 border border-slate-200 dark:border-slate-700 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Negative Marking *
+                    </label>
+                    <select
+                      value={negativeMarkingEnabled ? 'yes' : 'no'}
+                      onChange={(e) => setNegativeMarkingEnabled(e.target.value === 'yes')}
+                      className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white font-semibold focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="no">No (No deduction for wrong answers)</option>
+                      <option value="yes">Yes (Deduct marks for wrong answers)</option>
+                    </select>
+                  </div>
+
+                  {negativeMarkingEnabled ? (
+                    <div className="animate-in fade-in">
+                      <label className="block text-xs font-bold text-rose-700 dark:text-rose-300 mb-1">
+                        Deduction per Wrong Answer *
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0.01"
+                          max={totalMarks}
+                          required
+                          placeholder="e.g. 0.25, 0.33, 0.5, 1"
+                          value={negativeMarksPerQuestion}
+                          onChange={(e) => setNegativeMarksPerQuestion(e.target.value)}
+                          className="w-full pl-3.5 pr-24 py-2.5 text-xs rounded-xl border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-white font-bold focus:ring-2 focus:ring-rose-500"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-rose-600 dark:text-rose-400 pointer-events-none">
+                          marks / wrong
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center text-[11px] text-slate-500 pt-5">
+                      Standard evaluation: Incorrect answers award 0 marks without penalty.
+                    </div>
+                  )}
+                </div>
+
+                {negativeMarkingEnabled && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 flex items-center space-x-1">
+                    <span>⚠️ For every wrong objective response, {negativeMarksPerQuestion || '0'} mark will be deducted. Unattempted questions incur 0 deduction.</span>
+                  </p>
+                )}
               </div>
 
               <div>

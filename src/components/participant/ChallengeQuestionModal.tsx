@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Exam, Question, Submission, ChallengeReason } from '../../types/exam';
+import { Exam, Question, Submission, ChallengeReason, ChallengeAttachment } from '../../types/exam';
 import { examService } from '../../services/examService';
 import {
   HelpCircle,
@@ -16,7 +16,10 @@ import {
   AlertTriangle,
   Lock,
   Calendar,
-  CheckSquare
+  CheckSquare,
+  Paperclip,
+  Image as ImageIcon,
+  Trash2
 } from 'lucide-react';
 
 interface ChallengeQuestionModalProps {
@@ -40,13 +43,52 @@ export const ChallengeQuestionModal: React.FC<ChallengeQuestionModalProps> = ({
 }) => {
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [challengeData, setChallengeData] = useState<
-    Record<string, { reason: ChallengeReason; explanation: string; supportingReference: string }>
+    Record<string, { reason: ChallengeReason; explanation: string; supportingReference: string; attachment?: ChallengeAttachment }>
   >({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Available questions pool: either passed in allQuestions or singleton question
   const questionsPool = allQuestions.length > 0 ? allQuestions : question ? [question] : [];
+
+  // File upload handler
+  const handleFileUpload = (qId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      alert('File size exceeds 2MB limit. Please upload a smaller image or compressed PDF.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setChallengeData((prev) => ({
+        ...prev,
+        [qId]: {
+          ...(prev[qId] || { reason: 'correct_marked_wrong', explanation: '', supportingReference: '' }),
+          attachment: {
+            name: file.name,
+            type: file.type || 'application/octet-stream',
+            dataUrl,
+            size: file.size,
+          },
+        },
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeAttachment = (qId: string) => {
+    setChallengeData((prev) => ({
+      ...prev,
+      [qId]: {
+        ...(prev[qId] || { reason: 'correct_marked_wrong', explanation: '', supportingReference: '' }),
+        attachment: undefined,
+      },
+    }));
+  };
 
   // Initialize selected questions on open
   useEffect(() => {
@@ -172,6 +214,7 @@ export const ChallengeQuestionModal: React.FC<ChallengeQuestionModalProps> = ({
           challengeReason: item.reason,
           candidateExplanation: item.explanation.trim(),
           supportingReference: item.supportingReference?.trim() || undefined,
+          candidateAttachment: item.attachment,
         };
       });
 
@@ -453,6 +496,54 @@ export const ChallengeQuestionModal: React.FC<ChallengeQuestionModalProps> = ({
                             onChange={(e) => updateItemData(qId, 'supportingReference', e.target.value)}
                             className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
                           />
+                        </div>
+
+                        {/* Image / PDF Attachment Upload */}
+                        <div className="space-y-1.5 pt-1">
+                          <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                            <span className="flex items-center space-x-1">
+                              <Paperclip className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Attach Image or PDF Proof (Optional)</span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-normal">Max 2MB (.png, .jpg, .pdf)</span>
+                          </label>
+
+                          {itemData.attachment ? (
+                            <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex items-center justify-between text-xs">
+                              <div className="flex items-center space-x-2 truncate">
+                                {itemData.attachment.type.includes('image') ? (
+                                  <ImageIcon className="w-4 h-4 text-amber-600 shrink-0" />
+                                ) : (
+                                  <FileText className="w-4 h-4 text-rose-500 shrink-0" />
+                                )}
+                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                  {itemData.attachment.name}
+                                </span>
+                                <span className="text-[10px] text-slate-400 shrink-0">
+                                  ({Math.round((itemData.attachment.size || 0) / 1024)} KB)
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => removeAttachment(qId)}
+                                className="p-1 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
+                                title="Remove attachment"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <label className="flex items-center space-x-2 px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-amber-400 dark:hover:border-amber-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs cursor-pointer transition-colors">
+                              <Paperclip className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Select Image or PDF File...</span>
+                              <input
+                                type="file"
+                                accept="image/*,.pdf"
+                                onChange={(e) => handleFileUpload(qId, e)}
+                                className="hidden"
+                              />
+                            </label>
+                          )}
                         </div>
                       </div>
                     );

@@ -63,6 +63,7 @@ import { AuthorizeResultsPublicationModal } from './AuthorizeResultsPublicationM
 import { AuthorizeChallengeModal } from './AuthorizeChallengeModal';
 import { ChallengeDetailsModal } from '../common/ChallengeDetailsModal';
 import { ExamScorecardsDashboard } from './ExamScorecardsDashboard';
+import { AdmitCardModal } from './AdmitCardModal';
 import { QuestionChallenge } from '../../types/exam';
 
 export const AdminPortal: React.FC = () => {
@@ -99,6 +100,10 @@ export const AdminPortal: React.FC = () => {
   const [authorizeResultsExam, setAuthorizeResultsExam] = useState<Exam | null>(null);
   const [authorizeChallengeModalItem, setAuthorizeChallengeModalItem] = useState<QuestionChallenge | null>(null);
   const [viewChallengeDetailsAdmin, setViewChallengeDetailsAdmin] = useState<QuestionChallenge | null>(null);
+
+  // Admit Card Generation Modal state
+  const [admitCardExam, setAdmitCardExam] = useState<Exam | null>(null);
+  const [admitCardCandidateId, setAdmitCardCandidateId] = useState<string | undefined>(undefined);
 
   // Modals state
   const [passwordModalUser, setPasswordModalUser] = useState<UserProfile | null>(null);
@@ -170,6 +175,32 @@ export const AdminPortal: React.FC = () => {
       await loadData();
     } catch (err) {
       console.error('Failed to toggle operational status:', err);
+    }
+  };
+
+  const handleUnlinkCandidate = async (u: UserProfile) => {
+    const assignedExam = exams.find(
+      (e) =>
+        e.id === u.assignedExamId ||
+        (e.assignedParticipantIds && e.assignedParticipantIds.includes(u.uid))
+    );
+    if (
+      !window.confirm(
+        `Are you sure you want to unlink candidate "${u.displayName}" (${u.employeeId || 'ID'}) from "${assignedExam?.title || 'Exam'}"?\n\nThis will remove them from the enrolled candidates for this examination and return them to the general pool.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await examService.unlinkParticipantFromExam(u.uid, assignedExam?.id || u.assignedExamId);
+      setActionSuccess(
+        `Candidate "${u.displayName}" unlinked from examination. Enrolled candidate roster updated.`
+      );
+      setTimeout(() => setActionSuccess(null), 3500);
+      await loadData();
+    } catch (err: any) {
+      alert(`Failed to unlink candidate: ${err?.message || 'Error'}`);
     }
   };
 
@@ -264,7 +295,11 @@ export const AdminPortal: React.FC = () => {
         u.employeeId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         u.department?.toLowerCase().includes(searchTerm.toLowerCase());
 
-      const matchExam = examFilter === 'all' || u.assignedExamId === examFilter;
+      const targetExam = exams.find((e) => e.id === examFilter);
+      const matchExam =
+        examFilter === 'all' ||
+        u.assignedExamId === examFilter ||
+        (targetExam?.assignedParticipantIds && targetExam.assignedParticipantIds.includes(u.uid));
       return matchSearch && matchExam;
     });
   };
@@ -299,14 +334,6 @@ export const AdminPortal: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setGenerateExamModalOpen(true)}
-              className="flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-extrabold bg-white text-rose-950 hover:bg-rose-50 shadow-lg shadow-black/20 hover:scale-[1.02] transition-all"
-            >
-              <Plus className="w-4 h-4 text-rose-600" />
-              <span>+ Generate New Exam</span>
-            </button>
             <button
               type="button"
               onClick={loadData}
@@ -831,7 +858,11 @@ export const AdminPortal: React.FC = () => {
                     </tr>
                   ) : (
                     filteredParticipants.map((u) => {
-                      const assignedExam = exams.find((e) => e.id === u.assignedExamId);
+                      const assignedExam = exams.find(
+                        (e) =>
+                          e.id === u.assignedExamId ||
+                          (e.assignedParticipantIds && e.assignedParticipantIds.includes(u.uid))
+                      );
                       const displayPassword = u.defaultPasswordAssigned || candidateDefaultPassword;
                       const isSelected = selectedCandidateUids.includes(u.uid);
 
@@ -872,9 +903,17 @@ export const AdminPortal: React.FC = () => {
                                   type="button"
                                   onClick={() => setLinkCandidateModalUser(u)}
                                   className="p-1 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-                                  title="Change or Unlink Exam"
+                                  title="Change Exam"
                                 >
                                   <Edit className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnlinkCandidate(u)}
+                                  className="p-1 rounded-md text-rose-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                  title="Unlink Candidate from this Exam (Removes from exam enrolled list)"
+                                >
+                                  <Unlink className="w-3 h-3" />
                                 </button>
                               </div>
                             ) : (
@@ -934,14 +973,38 @@ export const AdminPortal: React.FC = () => {
                           </td>
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end space-x-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setLinkCandidateModalUser(u)}
-                                className="p-1 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700"
-                                title="Link Candidate to Exam"
-                              >
-                                <Link2 className="w-3.5 h-3.5 text-indigo-600" />
-                              </button>
+                              {assignedExam && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAdmitCardExam(assignedExam);
+                                    setAdmitCardCandidateId(u.uid);
+                                  }}
+                                  className="p-1 rounded-lg text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                                  title={`Generate / View Admit Card for "${assignedExam.title}"`}
+                                >
+                                  <IdCard className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {assignedExam ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnlinkCandidate(u)}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                  title="Unlink Candidate from Exam (Removes from enrolled list)"
+                                >
+                                  <Unlink className="w-3.5 h-3.5" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setLinkCandidateModalUser(u)}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                                  title="Link Candidate to Exam"
+                                >
+                                  <Link2 className="w-3.5 h-3.5 text-indigo-600" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setPasswordModalUser(u)}
@@ -1613,7 +1676,7 @@ export const AdminPortal: React.FC = () => {
                 </span>
                 <div>
                   <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                    Institutional Exam Command Center
+                    Institutional Exam Command Centre
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     Exam-based control: Generate exams, assign Paper Setters, Evaluators & Candidates, and authorize/alter live exam schedules.
@@ -1626,9 +1689,8 @@ export const AdminPortal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setGenerateExamModalOpen(true)}
-                className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 shadow-md shadow-rose-600/20 hover:scale-[1.02] transition-all"
+                className="flex items-center justify-center px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 shadow-md shadow-rose-600/20 hover:scale-[1.02] transition-all"
               >
-                <Plus className="w-4 h-4" />
                 <span>+ Generate New Exam</span>
               </button>
             </div>
@@ -1767,9 +1829,11 @@ export const AdminPortal: React.FC = () => {
                 })
                 .map((exam) => {
                   const examSubs = submissions.filter((s) => s.examId === exam.id);
-                  const assignedCount = exam.assignedParticipantIds
-                    ? exam.assignedParticipantIds.length
-                    : participants.length;
+                  const examEnrolledCandidates = participants.filter((p) => {
+                    const fromRoster = exam.assignedParticipantIds || [];
+                    return fromRoster.includes(p.uid) || p.assignedExamId === exam.id;
+                  });
+                  const assignedCount = examEnrolledCandidates.length;
 
                   // Real-time live window status
                   const nowMs = Date.now();
@@ -1799,6 +1863,11 @@ export const AdminPortal: React.FC = () => {
                               ) : (
                                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">
                                   DRAFT
+                                </span>
+                              )}
+                              {exam.negativeMarkingEnabled && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                  -{exam.negativeMarksPerQuestion || '0.25'} NEGATIVE MARKING
                                 </span>
                               )}
                             </div>
@@ -1850,6 +1919,17 @@ export const AdminPortal: React.FC = () => {
                           <span>Passing: <strong className="text-slate-800 dark:text-slate-200">{exam.passingMarks} pts</strong></span>
                           <span>•</span>
                           <span>Submissions: <strong className="text-slate-800 dark:text-slate-200">{examSubs.length}</strong></span>
+                          <span>•</span>
+                          <span>
+                            Negative Marking:{' '}
+                            {exam.negativeMarkingEnabled ? (
+                              <strong className="text-rose-600 dark:text-rose-400">
+                                Yes (-{exam.negativeMarksPerQuestion || '0.25'} / wrong)
+                              </strong>
+                            ) : (
+                              <strong className="text-slate-600 dark:text-slate-400">No</strong>
+                            )}
+                          </span>
                         </div>
                       </div>
 
@@ -1916,6 +1996,18 @@ export const AdminPortal: React.FC = () => {
                               >
                                 <Link2 className="w-2.5 h-2.5" />
                                 <span>Link / Manage Pool</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAdmitCardExam(exam);
+                                  setAdmitCardCandidateId(undefined);
+                                }}
+                                className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold hover:underline text-left flex items-center space-x-1"
+                                title="Generate Admit Cards for enrolled candidates"
+                              >
+                                <IdCard className="w-2.5 h-2.5" />
+                                <span>Admit Cards ({assignedCount})</span>
                               </button>
                               <button
                                 type="button"
@@ -2207,6 +2299,19 @@ export const AdminPortal: React.FC = () => {
                           >
                             <FileText className="w-3.5 h-3.5 text-purple-500" />
                             <span>Submissions ({examSubs.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdmitCardExam(exam);
+                              setAdmitCardCandidateId(undefined);
+                            }}
+                            className="px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold text-xs flex items-center space-x-1.5 shadow-2xs"
+                            title="Generate and print official Admit Cards for all enrolled candidates"
+                          >
+                            <IdCard className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Admit Cards ({assignedCount})</span>
                           </button>
                         </div>
 
@@ -2537,6 +2642,23 @@ export const AdminPortal: React.FC = () => {
           isOpen={Boolean(viewChallengeDetailsAdmin)}
           challenge={viewChallengeDetailsAdmin}
           onClose={() => setViewChallengeDetailsAdmin(null)}
+        />
+      )}
+
+      {/* Admit Card Generation & Verification Modal */}
+      {admitCardExam && (
+        <AdmitCardModal
+          isOpen={Boolean(admitCardExam)}
+          exam={admitCardExam}
+          candidates={participants.filter((p) => {
+            const fromRoster = admitCardExam.assignedParticipantIds || [];
+            return fromRoster.includes(p.uid) || p.assignedExamId === admitCardExam.id;
+          })}
+          initialCandidateId={admitCardCandidateId}
+          onClose={() => {
+            setAdmitCardExam(null);
+            setAdmitCardCandidateId(undefined);
+          }}
         />
       )}
     </div>

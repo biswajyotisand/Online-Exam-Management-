@@ -31,6 +31,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { OfficialScorecardModal } from '../participant/OfficialScorecardModal';
+import * as XLSX from 'xlsx';
 
 interface ExamScorecardsDashboardProps {
   exams: Exam[];
@@ -207,9 +208,9 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
     }
   };
 
-  // Export to Excel format (.xls / .csv) compatible with Microsoft Excel
+  // Export to Excel format (.xlsx / .xls / .csv) compatible with Microsoft Excel
   const handleDownloadExcel = (
-    format: 'xls' | 'csv' = 'xls',
+    format: 'xlsx' | 'xls' | 'csv' = 'xlsx',
     mode: 'post_resolution' | 'pre_challenge' | 'comparison' = ledgerViewMode
   ) => {
     if (!selectedExam) return;
@@ -282,6 +283,34 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
           timestamp: s.submittedAt ? new Date(s.submittedAt).toLocaleString() : 'N/A'
         };
       });
+
+      if (format === 'xlsx') {
+        const sheetData = compItems.map((d) => ({
+          'Rank': d.rank,
+          'Candidate Name': d.candidateName,
+          'Candidate Email': d.candidateEmail,
+          'Employee ID / Roll': d.employeeId,
+          'Pre-Challenge Score': d.preScore,
+          'Pre-Challenge Max Marks': d.preMax,
+          'Pre-Challenge Passing Standard': d.prePass,
+          'Pre-Challenge %': d.prePct,
+          'Pre-Challenge Result': d.preResult,
+          'Post-Resolution Score': d.postScore,
+          'Post-Resolution Max Marks': d.postMax,
+          'Post-Resolution Passing Standard': d.postPass,
+          'Post-Resolution %': d.postPct,
+          'Post-Resolution Result': d.postResult,
+          'Net Score Delta': d.deltaStr,
+          'Debatable Questions Skipped': d.skippedCount,
+          'Questions Attempted': d.attempted,
+          'Submission Timestamp': d.timestamp,
+        }));
+        const ws = XLSX.utils.json_to_sheet(sheetData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Comparative_Audit');
+        XLSX.writeFile(wb, `ComparativeAudit_${cleanTitle}_${dateStr}.xlsx`);
+        return;
+      }
 
       if (format === 'xls') {
         const htmlTable = `
@@ -437,6 +466,32 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
       };
     });
 
+    if (format === 'xlsx') {
+      const sheetData = dataItems.map((d) => ({
+        'Rank': d.rank,
+        'Exam Title': d.examTitle,
+        'Subject': d.subject,
+        'Candidate Name': d.candidateName,
+        'Candidate Email': d.candidateEmail,
+        'Employee ID / Roll': d.employeeId,
+        'Questions Attempted': d.attempted,
+        'Total Questions': d.totalQuestions,
+        'Marks Obtained': d.marksObtained,
+        'Total Marks': d.totalMarks,
+        'Percentage (%)': d.percentage,
+        'Pass / Fail Remark': d.remark,
+        'Passing Standard': d.passingStandard,
+        'Evaluator Remarks': d.evaluatorRemarks,
+        'Proctoring Violation Strikes': d.violations,
+        'Submission Timestamp': d.timestamp,
+      }));
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, isPre ? 'Pre_Challenge_Ledger' : 'Scorecards_Ledger');
+      XLSX.writeFile(wb, `ExamScorecards_${isPre ? 'PreChallenge_' : ''}${cleanTitle}_${dateStr}.xlsx`);
+      return;
+    }
+
     if (format === 'xls') {
       const htmlTable = `
         <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
@@ -573,13 +628,13 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
           <div className="flex items-center space-x-2 mt-auto">
             <button
               type="button"
-              onClick={() => handleDownloadExcel('xls')}
+              onClick={() => handleDownloadExcel('xlsx')}
               disabled={!selectedExam || examSubmissions.length === 0}
               className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20 transition-all disabled:opacity-40 cursor-pointer"
-              title="Download formatted Microsoft Excel spreadsheet with pass/fail remarks and scorecard ledger"
+              title="Download formatted Microsoft Excel (.xlsx) spreadsheet with pass/fail remarks and scorecard ledger"
             >
               <FileSpreadsheet className="w-4 h-4" />
-              <span>Download in Excel (.xls)</span>
+              <span>Download in Excel (.xlsx)</span>
             </button>
 
             <button
@@ -636,18 +691,18 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
           </div>
 
           {/* Candidate Attempt Regulation Info Banner if set */}
-          {selectedExam.maxQuestionsToAttempt && selectedExam.maxQuestionsToAttempt < examQuestions.length && (
+          {selectedExam.maxQuestionsToAttempt && selectedExam.maxQuestionsToAttempt < questions.length && (
             <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-xs flex flex-wrap items-center justify-between gap-3 text-indigo-950 dark:text-indigo-200">
               <div className="flex items-center space-x-2">
                 <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white font-extrabold text-[10px] uppercase">
                   Attempt Rule
                 </span>
                 <span className="font-semibold">
-                  Out of <strong>{examQuestions.length}</strong> questions in paper, candidates are permitted to appear in only <strong>{selectedExam.maxQuestionsToAttempt}</strong> questions.
+                  Out of <strong>{questions.length}</strong> questions in paper, candidates are permitted to appear in only <strong>{selectedExam.maxQuestionsToAttempt}</strong> questions.
                 </span>
               </div>
               <span className="text-[11px] text-indigo-700 dark:text-indigo-300 font-medium">
-                Compulsory Questions: {examQuestions.filter((q) => q.isMandatory).length} (Must Attend)
+                Compulsory Questions: {questions.filter((q: Question) => q.isMandatory).length} (Must Attend)
               </span>
             </div>
           )}
@@ -915,11 +970,11 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleDownloadExcel('xls', 'comparison')}
+                  onClick={() => handleDownloadExcel('xlsx', 'comparison')}
                   className="px-3 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shrink-0 self-start sm:self-auto flex items-center space-x-1 cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3 h-3" />
-                  <span>Download Comparative Ledger (.xls)</span>
+                  <span>Download Comparative Ledger (.xlsx)</span>
                 </button>
               </div>
             )}
@@ -934,11 +989,11 @@ export const ExamScorecardsDashboard: React.FC<ExamScorecardsDashboardProps> = (
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleDownloadExcel('xls', 'pre_challenge')}
+                  onClick={() => handleDownloadExcel('xlsx', 'pre_challenge')}
                   className="px-3 py-1 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shrink-0 self-start sm:self-auto flex items-center space-x-1 cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3 h-3" />
-                  <span>Download Baseline (.xls)</span>
+                  <span>Download Baseline (.xlsx)</span>
                 </button>
               </div>
             )}

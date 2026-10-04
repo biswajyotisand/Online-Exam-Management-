@@ -14,7 +14,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   mustChangePassword: boolean;
   isOperational: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: () => Promise<boolean>;
   signInWithEmployeeId: (employeeId: string, password: string) => Promise<UserProfile>;
   signUpWithEmployeeId: (data: {
     name: string;
@@ -142,14 +142,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (): Promise<boolean> => {
     try {
       const res = await signInWithPopup(auth, googleProvider);
       if (res.user) {
         await fetchProfileForUser(res.user);
+        return true;
       }
-    } catch (err) {
-      console.error('Google sign-in error:', err);
+      return false;
+    } catch (err: any) {
+      // User closed popup or cancelled sign-in
+      if (
+        err?.code === 'auth/popup-closed-by-user' ||
+        err?.code === 'auth/cancelled-popup-request' ||
+        err?.message?.includes('popup-closed-by-user') ||
+        err?.message?.includes('cancelled-popup-request')
+      ) {
+        console.info('Google sign-in popup was dismissed by the user.');
+        return false;
+      }
+
+      if (err?.code === 'auth/popup-blocked') {
+        const errorMsg = 'Google sign-in popup was blocked by browser. Please enable popups or try again.';
+        console.warn(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      console.error('Google sign-in error:', err?.message || err);
       throw err;
     }
   };

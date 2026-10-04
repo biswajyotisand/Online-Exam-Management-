@@ -91,6 +91,10 @@ export const ParticipantPortal: React.FC = () => {
       alert('Access Denied: Administrator is in view-only inspection mode and cannot participate in examinations.');
       return;
     }
+    if (!profile || !examService.isParticipantEnrolled(exam, profile)) {
+      alert('Access Denied: You are not enrolled in this examination. Candidates must be linked by the Administrator to participate.');
+      return;
+    }
     setSelectedExamToStart(exam);
     setIntegrityPledgeChecked(false);
   };
@@ -101,6 +105,10 @@ export const ParticipantPortal: React.FC = () => {
       return;
     }
     if (!selectedExamToStart) return;
+    if (!profile || !examService.isParticipantEnrolled(selectedExamToStart, profile)) {
+      alert('Access Denied: You are not enrolled in this examination.');
+      return;
+    }
     try {
       setStarting(true);
       const activeCandidateProfile: UserProfile = profile || {
@@ -138,6 +146,10 @@ export const ParticipantPortal: React.FC = () => {
       setLoading(true);
       const exam = await examService.getExamById(sub.examId);
       if (!exam) return;
+      if (!profile || !examService.isParticipantEnrolled(exam, profile)) {
+        alert('Access Denied: You are not enrolled in this examination.');
+        return;
+      }
       const qList = await examService.getQuestionsForCandidate(sub.examId);
       setActiveTakingSession({
         exam,
@@ -189,6 +201,13 @@ export const ParticipantPortal: React.FC = () => {
     // Open Attempt Slip immediately to view/print attempted & unattempted questions
     handleOpenAttemptSlip(updatedSub);
   };
+
+  // Filter exams that this candidate is explicitly enrolled in by Administrator
+  const allocatedExams = exams.filter((exam) => {
+    if (isViewOnlyAdmin) return true;
+    if (!profile) return false;
+    return examService.isParticipantEnrolled(exam, profile);
+  });
 
   // If candidate is actively taking an exam:
   if (activeTakingSession) {
@@ -257,7 +276,7 @@ export const ParticipantPortal: React.FC = () => {
             }`}
           >
             <BookOpen className="w-4 h-4" />
-            <span>Available Tests ({exams.length})</span>
+            <span>Allocated Tests ({allocatedExams.length})</span>
           </button>
           <button
             type="button"
@@ -294,31 +313,32 @@ export const ParticipantPortal: React.FC = () => {
               Allocated Examinations & Live Schedule
             </h2>
             <span className="text-xs text-slate-500">
-              Select any live test to review instructions and start
+              Select any allocated live test to review instructions and start
             </span>
           </div>
 
-          {exams.length === 0 ? (
-            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center text-slate-400 text-xs">
-              No examinations currently allocated. Check back when the Administrator schedules your tests.
+          {allocatedExams.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-10 sm:p-12 text-center text-slate-500 dark:text-slate-400 text-xs shadow-xs space-y-3">
+              <div className="w-14 h-14 rounded-3xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto border border-indigo-200 dark:border-indigo-800">
+                <GraduationCap className="w-7 h-7" />
+              </div>
+              <h3 className="font-extrabold text-slate-900 dark:text-white text-base">
+                No Allocated Examinations Found
+              </h3>
+              <p className="max-w-md mx-auto text-slate-500 dark:text-slate-400 leading-relaxed text-xs">
+                You are registered in the general candidate pool, but you have not been linked to any examination paper. Only candidates explicitly enrolled by the Administrator can view and take scheduled examinations.
+              </p>
+              <div className="pt-2">
+                <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                  <span>Candidate ID: {profile?.employeeId || profile?.uid.slice(0, 8)}</span>
+                  <span>•</span>
+                  <span>Status: General Pool (Unlinked)</span>
+                </span>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {exams
-                .filter((exam) => {
-                  if (isViewOnlyAdmin) return true;
-                  if (exam.assignedParticipantIds && exam.assignedParticipantIds.length > 0) {
-                    const uidMatch = profile?.uid ? exam.assignedParticipantIds.includes(profile.uid) : false;
-                    const empIdMatch = profile?.employeeId ? exam.assignedParticipantIds.includes(profile.employeeId) : false;
-                    const examIdMatch = profile?.assignedExamId ? profile.assignedExamId === exam.id : false;
-                    return uidMatch || empIdMatch || examIdMatch;
-                  }
-                  if (profile?.assignedExamId) {
-                    return profile.assignedExamId === exam.id;
-                  }
-                  return true;
-                })
-                .map((exam) => {
+              {allocatedExams.map((exam) => {
                   const existingSub = mySubmissions.find((s) => s.examId === exam.id);
                   const isFinished = existingSub && existingSub.status !== 'in_progress';
                   const isInProgress = existingSub && existingSub.status === 'in_progress';
@@ -347,6 +367,11 @@ export const ParticipantPortal: React.FC = () => {
                             {exam.assignedParticipantIds?.includes(profile?.uid || '') && (
                               <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
                                 Allocated
+                              </span>
+                            )}
+                            {exam.negativeMarkingEnabled && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
+                                -{exam.negativeMarksPerQuestion || '0.25'} Negative Marking
                               </span>
                             )}
                           </div>

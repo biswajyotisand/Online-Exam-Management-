@@ -35,9 +35,14 @@ export const ManageExamAssignmentsModal: React.FC<ManageExamAssignmentsModalProp
 
   const [selectedSetterId, setSelectedSetterId] = useState(exam.setterId || '');
   const [selectedEvaluatorId, setSelectedEvaluatorId] = useState(exam.evaluatorId || '');
-  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>(
-    exam.assignedParticipantIds || participants.map((p) => p.uid)
-  );
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>(() => {
+    // Both exam's assigned roster AND candidate profiles with assignedExamId === exam.id
+    const fromRoster = exam.assignedParticipantIds || [];
+    const fromProfiles = participants
+      .filter((p) => p.assignedExamId === exam.id)
+      .map((p) => p.uid);
+    return Array.from(new Set([...fromRoster, ...fromProfiles]));
+  });
   const [candidateSearch, setCandidateSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

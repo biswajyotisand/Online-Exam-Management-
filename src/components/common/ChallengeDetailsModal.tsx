@@ -1,5 +1,5 @@
-import React from 'react';
-import { QuestionChallenge } from '../../types/exam';
+import React, { useState } from 'react';
+import { QuestionChallenge, ChallengeAttachment } from '../../types/exam';
 import {
   HelpCircle,
   X,
@@ -10,7 +10,13 @@ import {
   ShieldCheck,
   BookOpen,
   ArrowRight,
-  Award
+  Award,
+  Paperclip,
+  FileText,
+  Image as ImageIcon,
+  Download,
+  Eye,
+  Maximize2
 } from 'lucide-react';
 
 interface ChallengeDetailsModalProps {
@@ -24,7 +30,54 @@ export const ChallengeDetailsModal: React.FC<ChallengeDetailsModalProps> = ({
   challenge,
   onClose,
 }) => {
+  const [previewAttachment, setPreviewAttachment] = useState<ChallengeAttachment | null>(null);
+
   if (!isOpen || !challenge) return null;
+
+  const renderAttachmentBadge = (att?: ChallengeAttachment, roleLabel: string = 'Proof') => {
+    if (!att) return null;
+    const isImage = att.type.includes('image');
+
+    return (
+      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3 text-xs mt-2">
+        <div className="flex items-center space-x-2 truncate">
+          {isImage ? (
+            <ImageIcon className="w-4 h-4 text-indigo-600 shrink-0" />
+          ) : (
+            <FileText className="w-4 h-4 text-rose-500 shrink-0" />
+          )}
+          <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+            {roleLabel}: {att.name}
+          </span>
+          <span className="text-[10px] text-slate-400 shrink-0">
+            ({Math.round((att.size || 0) / 1024)} KB)
+          </span>
+        </div>
+
+        <div className="flex items-center space-x-1.5 shrink-0">
+          {isImage ? (
+            <button
+              type="button"
+              onClick={() => setPreviewAttachment(att)}
+              className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold hover:bg-indigo-100 flex items-center space-x-1 cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Preview</span>
+            </button>
+          ) : (
+            <a
+              href={att.dataUrl}
+              download={att.name}
+              className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold hover:bg-indigo-100 flex items-center space-x-1 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download PDF</span>
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const getStatusBadge = () => {
     switch (challenge.status) {
@@ -160,7 +213,39 @@ export const ChallengeDetailsModal: React.FC<ChallengeDetailsModalProps> = ({
                 <span>{challenge.supportingReference}</span>
               </div>
             )}
+            {renderAttachmentBadge(challenge.candidateAttachment, 'Candidate Uploaded Proof')}
           </div>
+
+          {/* Paper Setter Review Stage */}
+          {challenge.setterReviewedAt && (
+            <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-900/50 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-1.5 font-bold text-indigo-900 dark:text-indigo-300">
+                  <BookOpen className="w-4 h-4 text-indigo-600" />
+                  <span>Paper Setter Technical Review ({challenge.setterName || 'Paper Setter'})</span>
+                </div>
+                <span className="text-[10px] text-indigo-500 font-medium">
+                  {new Date(challenge.setterReviewedAt).toLocaleString()}
+                </span>
+              </div>
+              <div className="flex items-center space-x-3 text-xs">
+                <span className="font-bold px-2.5 py-0.5 rounded-full text-[11px] bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
+                  Recommendation: {challenge.setterDecision?.replace(/_/g, ' ').toUpperCase()}
+                </span>
+                {challenge.setterProposedAnswer && (
+                  <span className="text-xs text-indigo-700 dark:text-indigo-300">
+                    Proposed Key: <strong className="font-mono">{challenge.setterProposedAnswer}</strong>
+                  </span>
+                )}
+              </div>
+              {challenge.setterReviewNotes && (
+                <p className="text-slate-700 dark:text-slate-300 leading-relaxed bg-white dark:bg-slate-900/60 p-3 rounded-xl border border-indigo-200/40 dark:border-indigo-900/30">
+                  "{challenge.setterReviewNotes}"
+                </p>
+              )}
+              {renderAttachmentBadge(challenge.setterAttachment, 'Paper Setter Reference')}
+            </div>
+          )}
 
           {/* Evaluator Review Section */}
           {challenge.evaluatorReviewedAt ? (
@@ -190,6 +275,7 @@ export const ChallengeDetailsModal: React.FC<ChallengeDetailsModalProps> = ({
                   "{challenge.evaluatorReviewNotes}"
                 </p>
               )}
+              {renderAttachmentBadge(challenge.evaluatorAttachment, 'Evaluator Reference')}
             </div>
           ) : (
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-500 flex items-center space-x-2">
@@ -246,12 +332,49 @@ export const ChallengeDetailsModal: React.FC<ChallengeDetailsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 transition-colors"
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 transition-colors cursor-pointer"
           >
             Close Dossier
           </button>
         </div>
       </div>
+
+      {/* Fullscreen Attachment Image Preview Lightbox */}
+      {previewAttachment && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-3xl w-full p-4 shadow-2xl border border-slate-700 flex flex-col space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+              <span className="font-bold text-xs text-slate-800 dark:text-slate-200 truncate">
+                {previewAttachment.name}
+              </span>
+              <div className="flex items-center space-x-2">
+                <a
+                  href={previewAttachment.dataUrl}
+                  download={previewAttachment.name}
+                  className="px-3 py-1 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 flex items-center space-x-1"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewAttachment(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[75vh] overflow-auto rounded-2xl flex items-center justify-center bg-slate-950 p-2">
+              <img
+                src={previewAttachment.dataUrl}
+                alt={previewAttachment.name}
+                className="max-h-full max-w-full object-contain rounded-xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

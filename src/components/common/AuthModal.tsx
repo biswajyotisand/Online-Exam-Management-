@@ -20,10 +20,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     try {
       setLoading(true);
       setError(null);
-      await signInWithGoogle();
-      onClose();
+      const success = await signInWithGoogle();
+      if (success) {
+        onClose();
+      }
     } catch (err: any) {
-      setError(err?.message || 'Google sign in was cancelled or failed.');
+      if (
+        !err?.message?.includes('closed-by-user') &&
+        !err?.message?.includes('cancelled')
+      ) {
+        setError(err?.message || 'Google sign in failed.');
+      }
     } finally {
       setLoading(false);
     }

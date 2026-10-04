@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
-import { Exam, Question, Submission, UserProfile, AuditLog, UserRole, SystemPasscodes, QuestionChallenge, ChallengeStatus, ChallengeReason, CandidateChallengeSnapshot } from '../types/exam';
+import { Exam, Question, Submission, UserProfile, AuditLog, UserRole, SystemPasscodes, QuestionChallenge, ChallengeStatus, ChallengeReason, CandidateChallengeSnapshot, ChallengeAttachment } from '../types/exam';
 import { hashPassword } from '../lib/authCrypto';
 
 const USERS_COL = 'users';
@@ -517,14 +517,28 @@ export const examService = {
 
   async linkParticipantToExam(participantUid: string, examId: string, examTitle: string): Promise<void> {
     try {
-      // 1. Update candidate profile
+      // 1. Scrub candidate from any other exams to prevent duplicate allocations
+      const allExamsSnap = await getDocs(collection(db, EXAMS_COL));
+      for (const d of allExamsSnap.docs) {
+        if (d.id !== examId) {
+          const ex = d.data() as Exam;
+          if (ex.assignedParticipantIds && ex.assignedParticipantIds.includes(participantUid)) {
+            await updateDoc(d.ref, {
+              assignedParticipantIds: ex.assignedParticipantIds.filter((id) => id !== participantUid),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      // 2. Update candidate profile
       await updateDoc(doc(db, USERS_COL, participantUid), {
         assignedExamId: examId,
         assignedExamTitle: examTitle,
         updatedAt: new Date().toISOString(),
       });
 
-      // 2. Add to exam's assignedParticipantIds
+      // 3. Add to target exam's assignedParticipantIds
       const examSnap = await getDoc(doc(db, EXAMS_COL, examId));
       if (examSnap.exists()) {
         const examData = examSnap.data() as Exam;
@@ -548,6 +562,14 @@ export const examService = {
 
   async unlinkParticipantFromExam(participantUid: string, examId?: string): Promise<void> {
     try {
+      let targetExamId = examId;
+      if (!targetExamId) {
+        const uDoc = await getDoc(doc(db, USERS_COL, participantUid));
+        if (uDoc.exists()) {
+          targetExamId = uDoc.data().assignedExamId;
+        }
+      }
+
       // 1. Update candidate profile to clear assignedExamId & assignedExamTitle
       await updateDoc(doc(db, USERS_COL, participantUid), {
         assignedExamId: deleteField(),
@@ -555,14 +577,26 @@ export const examService = {
         updatedAt: new Date().toISOString(),
       });
 
-      // 2. Remove from exam's assignedParticipantIds if examId is provided
-      if (examId) {
-        const examSnap = await getDoc(doc(db, EXAMS_COL, examId));
+      // 2. Remove from exam's assignedParticipantIds if examId is found
+      if (targetExamId) {
+        const examSnap = await getDoc(doc(db, EXAMS_COL, targetExamId));
         if (examSnap.exists()) {
           const examData = examSnap.data() as Exam;
           const currentParticipants = examData.assignedParticipantIds || [];
-          await updateDoc(doc(db, EXAMS_COL, examId), {
+          await updateDoc(doc(db, EXAMS_COL, targetExamId), {
             assignedParticipantIds: currentParticipants.filter((id) => id !== participantUid),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      // 3. Guarantee sync: Scrub participantUid from any exams that still list it in assignedParticipantIds
+      const allExamsSnap = await getDocs(collection(db, EXAMS_COL));
+      for (const d of allExamsSnap.docs) {
+        const ex = d.data() as Exam;
+        if (ex.assignedParticipantIds && ex.assignedParticipantIds.includes(participantUid)) {
+          await updateDoc(d.ref, {
+            assignedParticipantIds: ex.assignedParticipantIds.filter((id) => id !== participantUid),
             updatedAt: new Date().toISOString(),
           });
         }
@@ -570,7 +604,7 @@ export const examService = {
 
       await this.logAction(
         'PARTICIPANT_UNLINKED_FROM_EXAM',
-        `Unlinked candidate ${participantUid} from exam to general candidate pool`
+        `Unlinked candidate ${participantUid} from exam to general candidate pool (synchronized with exam enrolled roster)`
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${USERS_COL}/${participantUid}`);
@@ -584,7 +618,21 @@ export const examService = {
   ): Promise<number> {
     let count = 0;
     try {
-      // 1. Update all participants
+      // 1. Remove candidates from other exams to prevent duplicate allocations
+      const allExamsSnap = await getDocs(collection(db, EXAMS_COL));
+      for (const d of allExamsSnap.docs) {
+        if (d.id !== examId) {
+          const ex = d.data() as Exam;
+          if (ex.assignedParticipantIds && ex.assignedParticipantIds.some((id) => participantUids.includes(id))) {
+            await updateDoc(d.ref, {
+              assignedParticipantIds: ex.assignedParticipantIds.filter((id) => !participantUids.includes(id)),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      // 2. Update all participant profiles
       for (const uid of participantUids) {
         await updateDoc(doc(db, USERS_COL, uid), {
           assignedExamId: examId,
@@ -594,7 +642,7 @@ export const examService = {
         count++;
       }
 
-      // 2. Update exam's assignedParticipantIds
+      // 3. Update exam's assignedParticipantIds
       const examSnap = await getDoc(doc(db, EXAMS_COL, examId));
       if (examSnap.exists()) {
         const examData = examSnap.data() as Exam;
@@ -692,6 +740,16 @@ export const examService = {
     }
   ): Promise<void> {
     try {
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.scheduleStatus === 'schedule_authorized') {
+          throw new Error(
+            'Action Denied: The live examination schedule has been officially authorised by the Administrator and is sealed.'
+          );
+        }
+      }
+
       const updates = cleanFirestoreData({
         scheduledStartTime: data.scheduledStartTime,
         scheduledEndTime: data.scheduledEndTime,
@@ -857,6 +915,31 @@ export const examService = {
     return false;
   },
 
+  isParticipantEnrolled(
+    exam?: Exam | null,
+    user?: UserProfile | { uid?: string; employeeId?: string; assignedExamId?: string } | null
+  ): boolean {
+    if (!exam || !user) return false;
+
+    // 1. Direct profile link to this exam
+    if (user.assignedExamId && user.assignedExamId === exam.id) {
+      return true;
+    }
+
+    // 2. Exam roster contains candidate's UID or Employee ID
+    if (exam.assignedParticipantIds && Array.isArray(exam.assignedParticipantIds)) {
+      if (user.uid && exam.assignedParticipantIds.includes(user.uid)) {
+        return true;
+      }
+      if (user.employeeId && exam.assignedParticipantIds.includes(user.employeeId)) {
+        return true;
+      }
+    }
+
+    // Candidate is in general unlinked pool
+    return false;
+  },
+
   async updateExamAssignments(
     examId: string,
     data: {
@@ -868,18 +951,57 @@ export const examService = {
     }
   ): Promise<void> {
     try {
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      const oldExamData = examDoc.exists() ? (examDoc.data() as Exam) : null;
+      const oldAssignedIds = oldExamData?.assignedParticipantIds || [];
+      const newAssignedIds = data.assignedParticipantIds || [];
+      const examTitle = oldExamData?.title || 'Examination';
+
+      // 1. Update the exam document
       const updates = cleanFirestoreData({
         setterId: data.setterId,
         setterName: data.setterName,
         evaluatorId: data.evaluatorId || '',
         evaluatorName: data.evaluatorName || '',
-        assignedParticipantIds: data.assignedParticipantIds || [],
+        assignedParticipantIds: newAssignedIds,
         updatedAt: new Date().toISOString(),
       });
       await updateDoc(doc(db, EXAMS_COL, examId), updates);
+
+      // 2. Synchronize candidate user profiles in Firestore
+      // For all candidates newly/currently enrolled in this exam:
+      for (const uid of newAssignedIds) {
+        try {
+          await updateDoc(doc(db, USERS_COL, uid), {
+            assignedExamId: examId,
+            assignedExamTitle: examTitle,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn(`Could not sync candidate profile ${uid}:`, e);
+        }
+      }
+
+      // For candidates un-ticked/removed from this exam: clear assignedExamId if pointing to this exam
+      const removedIds = oldAssignedIds.filter((id) => !newAssignedIds.includes(id));
+      for (const uid of removedIds) {
+        try {
+          const uDoc = await getDoc(doc(db, USERS_COL, uid));
+          if (uDoc.exists() && uDoc.data().assignedExamId === examId) {
+            await updateDoc(doc(db, USERS_COL, uid), {
+              assignedExamId: deleteField(),
+              assignedExamTitle: deleteField(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (e) {
+          console.warn(`Could not clear candidate profile ${uid}:`, e);
+        }
+      }
+
       await this.logAction(
         'EXAM_ASSIGNMENTS_UPDATED',
-        `Administrator updated role assignments for exam ${examId} (Setter: ${data.setterName}, Evaluator: ${data.evaluatorName || 'None'}, Candidates: ${data.assignedParticipantIds.length})`
+        `Administrator updated role allocations for exam ${examId} (Setter: ${data.setterName}, Evaluator: ${data.evaluatorName || 'None'}, Candidates: ${newAssignedIds.length} enrolled - synchronized with candidate profiles)`
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${EXAMS_COL}/${examId}`);
@@ -938,11 +1060,21 @@ export const examService = {
   async saveQuestion(question: Question): Promise<void> {
     const path = `${EXAMS_COL}/${question.examId}/questions/${question.id}`;
     try {
+      // Check final authorization lockdown
+      const examDoc = await getDoc(doc(db, EXAMS_COL, question.examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.scheduleStatus === 'schedule_authorized') {
+          throw new Error(
+            'Action Denied: This examination paper has been finally authorised by the Administrator. Questions and paper content are sealed and cannot be altered.'
+          );
+        }
+      }
+
       const cleaned = cleanFirestoreData(question);
       await setDoc(doc(db, EXAMS_COL, question.examId, 'questions', question.id), cleaned);
       // Update exam question count and total marks if exam exists
       try {
-        const examDoc = await getDoc(doc(db, EXAMS_COL, question.examId));
         if (examDoc.exists()) {
           const questions = await this.getQuestions(question.examId);
           const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 0), 0);
@@ -963,9 +1095,19 @@ export const examService = {
   async deleteQuestion(examId: string, questionId: string): Promise<void> {
     const path = `${EXAMS_COL}/${examId}/questions/${questionId}`;
     try {
+      // Check final authorization lockdown
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.scheduleStatus === 'schedule_authorized') {
+          throw new Error(
+            'Action Denied: This examination paper has been finally authorised by the Administrator. Questions cannot be deleted from an authorised paper.'
+          );
+        }
+      }
+
       await deleteDoc(doc(db, EXAMS_COL, examId, 'questions', questionId));
       try {
-        const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
         if (examDoc.exists()) {
           const questions = await this.getQuestions(examId);
           const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 0), 0);
@@ -985,6 +1127,17 @@ export const examService = {
 
   async batchSaveQuestions(examId: string, newQuestions: Question[]): Promise<void> {
     try {
+      // Check final authorization lockdown
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.scheduleStatus === 'schedule_authorized') {
+          throw new Error(
+            'Action Denied: This examination paper has been finally authorised by the Administrator. Questions cannot be imported into an authorised paper.'
+          );
+        }
+      }
+
       for (const q of newQuestions) {
         const cleaned = cleanFirestoreData(q);
         await setDoc(doc(db, EXAMS_COL, examId, 'questions', q.id), cleaned);
@@ -1009,6 +1162,17 @@ export const examService = {
     maxQuestionsToAttempt?: number | null
   ): Promise<void> {
     try {
+      // Check final authorization lockdown
+      const examDoc = await getDoc(doc(db, EXAMS_COL, examId));
+      if (examDoc.exists()) {
+        const examData = examDoc.data() as Exam;
+        if (examData.scheduleStatus === 'schedule_authorized') {
+          throw new Error(
+            'Action Denied: This examination paper has been finally authorised by the Administrator. Attempt regulations cannot be altered.'
+          );
+        }
+      }
+
       const updates: any = {
         updatedAt: new Date().toISOString(),
       };
@@ -1071,6 +1235,11 @@ export const examService = {
   },
 
   async startSubmission(exam: Exam, user: UserProfile): Promise<Submission> {
+    if (!this.isParticipantEnrolled(exam, user)) {
+      throw new Error(
+        `Access Denied: Candidate "${user.displayName}" (${user.employeeId || user.uid}) is not enrolled in exam "${exam.title}". Only candidates explicitly linked by the Administrator are authorized to participate.`
+      );
+    }
     const submissionId = `sub_${exam.id}_${user.uid}`;
     const path = `${SUBMISSIONS_COL}/${submissionId}`;
     try {
@@ -1140,6 +1309,11 @@ export const examService = {
           if (q.correctAnswer && studentAns.toLowerCase() === q.correctAnswer.trim().toLowerCase()) {
             marks = q.marks;
             autoTotalScore += marks;
+          } else if (studentAns && exam.negativeMarkingEnabled && exam.negativeMarksPerQuestion) {
+            // Negative marking deduction for wrong answer
+            const deduction = Number(exam.negativeMarksPerQuestion) || 0;
+            marks = -deduction;
+            autoTotalScore -= deduction;
           }
         } else {
           hasSubjective = true;
@@ -1158,8 +1332,9 @@ export const examService = {
 
       // If exam has no subjective questions, it can be marked 'evaluated' immediately!
       const status = hasSubjective ? 'submitted' : 'evaluated';
-      const percentage = exam.totalMarks > 0 ? Math.round((autoTotalScore / exam.totalMarks) * 100) : 0;
-      const passed = autoTotalScore >= exam.passingMarks;
+      const boundedScore = Math.max(0, Number(autoTotalScore.toFixed(2)));
+      const percentage = exam.totalMarks > 0 ? Math.round((boundedScore / exam.totalMarks) * 100) : 0;
+      const passed = boundedScore >= exam.passingMarks;
 
       const attemptedQuestionsCount = questions.filter((q) => Boolean(answers[q.id]?.answer?.trim())).length;
       const compulsoryQuestions = questions.filter((q) => Boolean(q.isMandatory));
@@ -1170,7 +1345,7 @@ export const examService = {
         status,
         submittedAt: new Date().toISOString(),
         tabSwitchCount,
-        totalScore: autoTotalScore,
+        totalScore: boundedScore,
         maxScore: exam.totalMarks,
         percentage,
         passed: !hasSubjective ? passed : false,
@@ -1257,7 +1432,13 @@ export const examService = {
         if (q.type === 'mcq' || q.type === 'boolean') {
           // Evaluated automatically according to correct option provided by paper setter
           const isCorrect = q.correctAnswer && studentAns.toLowerCase() === q.correctAnswer.trim().toLowerCase();
-          const marks = isCorrect ? q.marks : 0;
+          let marks = 0;
+          if (isCorrect) {
+            marks = q.marks;
+          } else if (studentAns && exam.negativeMarkingEnabled && exam.negativeMarksPerQuestion) {
+            const deduction = Number(exam.negativeMarksPerQuestion) || 0;
+            marks = -deduction;
+          }
           totalScore += marks;
 
           updatedAnswers[q.id] = {
@@ -1267,8 +1448,10 @@ export const examService = {
             evaluatorFeedback: isCorrect
               ? `Auto-evaluated: Correct as per Paper Setter answer key ("${q.correctAnswer}"). Full marks awarded.`
               : studentAns
-              ? `Auto-evaluated: Incorrect. Selected "${studentAns}", correct option was "${q.correctAnswer}".`
-              : `Auto-evaluated: Question unattempted by candidate.`,
+              ? exam.negativeMarkingEnabled && exam.negativeMarksPerQuestion
+                ? `Auto-evaluated: Incorrect. Selected "${studentAns}", correct was "${q.correctAnswer}". Negative marking applied (-${exam.negativeMarksPerQuestion}).`
+                : `Auto-evaluated: Incorrect. Selected "${studentAns}", correct option was "${q.correctAnswer}".`
+              : `Auto-evaluated: Question unattempted by candidate (0 marks).`,
           };
         } else {
           // Descriptive: keep existing evaluated marks or 0
@@ -1278,12 +1461,13 @@ export const examService = {
 
       const effectiveTotalMarks = exam.totalMarks || sub.maxScore || 100;
       const effectivePassingMarks = exam.passingMarks || Math.round(effectiveTotalMarks * 0.4);
-      const percentage = effectiveTotalMarks > 0 ? Math.round((totalScore / effectiveTotalMarks) * 100) : 0;
-      const passed = totalScore >= effectivePassingMarks;
+      const boundedScore = Math.max(0, Number(totalScore.toFixed(2)));
+      const percentage = effectiveTotalMarks > 0 ? Math.round((boundedScore / effectiveTotalMarks) * 100) : 0;
+      const passed = boundedScore >= effectivePassingMarks;
 
       const updates: Partial<Submission> = {
         answers: updatedAnswers,
-        totalScore,
+        totalScore: boundedScore,
         maxScore: effectiveTotalMarks,
         percentage,
         passed,
@@ -1349,6 +1533,7 @@ export const examService = {
     challengeReason: ChallengeReason;
     candidateExplanation: string;
     supportingReference?: string;
+    candidateAttachment?: ChallengeAttachment;
   }): Promise<QuestionChallenge> {
     try {
       const challengeId = 'ch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -1437,6 +1622,7 @@ export const examService = {
       evaluatorDecision: 'recommend_accept' | 'recommend_reject' | 'recommend_skip_question';
       evaluatorRecommendedMarks?: number;
       evaluatorReviewNotes: string;
+      evaluatorAttachment?: ChallengeAttachment;
     }
   ): Promise<void> {
     try {
@@ -1453,6 +1639,7 @@ export const examService = {
         evaluatorRecommendedMarks:
           data.evaluatorDecision === 'recommend_accept' ? Number(data.evaluatorRecommendedMarks ?? challenge.originalMarksAwarded) : challenge.originalMarksAwarded,
         evaluatorReviewNotes: data.evaluatorReviewNotes,
+        evaluatorAttachment: data.evaluatorAttachment,
         evaluatorReviewedAt: new Date().toISOString(),
       };
 
@@ -1622,6 +1809,7 @@ export const examService = {
       setterDecision: 'recommend_alter_key' | 'uphold_original' | 'recommend_skip_question';
       setterProposedAnswer?: string;
       setterReviewNotes: string;
+      setterAttachment?: ChallengeAttachment;
     }
   ): Promise<void> {
     try {
@@ -1637,6 +1825,7 @@ export const examService = {
         setterDecision: data.setterDecision,
         setterProposedAnswer: data.setterProposedAnswer || '',
         setterReviewNotes: data.setterReviewNotes,
+        setterAttachment: data.setterAttachment,
         setterReviewedAt: new Date().toISOString(),
       };
 
@@ -1671,6 +1860,7 @@ export const examService = {
       challengeReason: ChallengeReason;
       candidateExplanation: string;
       supportingReference?: string;
+      candidateAttachment?: ChallengeAttachment;
     }>
   ): Promise<QuestionChallenge[]> {
     try {

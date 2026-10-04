@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { QuestionChallenge } from '../../types/exam';
+import { QuestionChallenge, ChallengeAttachment } from '../../types/exam';
 import { examService } from '../../services/examService';
 import {
   BookOpen,
@@ -10,7 +10,11 @@ import {
   XCircle,
   AlertTriangle,
   RotateCcw,
-  Check
+  Check,
+  Paperclip,
+  FileText,
+  Image as ImageIcon,
+  Trash2
 } from 'lucide-react';
 
 interface SetterReviewChallengeModalProps {
@@ -35,6 +39,7 @@ export const SetterReviewChallengeModal: React.FC<SetterReviewChallengeModalProp
   >('uphold_original');
   const [proposedAnswer, setProposedAnswer] = useState('');
   const [reviewNotes, setReviewNotes] = useState('');
+  const [attachment, setAttachment] = useState<ChallengeAttachment | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,10 +48,32 @@ export const SetterReviewChallengeModal: React.FC<SetterReviewChallengeModalProp
       setDecision('uphold_original');
       setProposedAnswer('');
       setReviewNotes('');
+      setAttachment(undefined);
     }
   }, [challenge]);
 
   if (!isOpen || !challenge) return null;
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      alert('File size exceeds 2MB limit. Please upload a smaller image or compressed PDF.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachment({
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        dataUrl: reader.result as string,
+        size: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,6 +96,7 @@ export const SetterReviewChallengeModal: React.FC<SetterReviewChallengeModalProp
         setterDecision: decision,
         setterProposedAnswer: decision === 'recommend_alter_key' ? proposedAnswer.trim() : undefined,
         setterReviewNotes: reviewNotes.trim(),
+        setterAttachment: attachment,
       });
 
       // If recommending skip, also attach skip recommendation to the question
@@ -271,6 +299,54 @@ export const SetterReviewChallengeModal: React.FC<SetterReviewChallengeModalProp
               placeholder="State the syllabus reference, derivation, or reason for key confirmation or revision..."
               className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
             />
+          </div>
+
+          {/* Supporting Image / PDF Attachment */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+              <span className="flex items-center space-x-1">
+                <Paperclip className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Attach Syllabus Page, Textbook Solution or PDF Proof (Optional)</span>
+              </span>
+              <span className="text-[10px] text-slate-400 font-normal">Max 2MB (.png, .jpg, .pdf)</span>
+            </label>
+
+            {attachment ? (
+              <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-800 flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-2 truncate">
+                  {attachment.type.includes('image') ? (
+                    <ImageIcon className="w-4 h-4 text-indigo-600 shrink-0" />
+                  ) : (
+                    <FileText className="w-4 h-4 text-rose-500 shrink-0" />
+                  )}
+                  <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                    {attachment.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400 shrink-0">
+                    ({Math.round((attachment.size || 0) / 1024)} KB)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAttachment(undefined)}
+                  className="p-1 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
+                  title="Remove attachment"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <label className="flex items-center space-x-2 px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs cursor-pointer transition-colors">
+                <Paperclip className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Select Proof Image or PDF File...</span>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            )}
           </div>
 
           {/* Action Buttons */}

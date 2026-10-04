@@ -14,7 +14,11 @@ import {
   FileCheck,
   AlertTriangle,
   RotateCcw,
-  Users
+  Users,
+  Paperclip,
+  FileText,
+  Image as ImageIcon,
+  Download
 } from 'lucide-react';
 
 interface AuthorizeChallengeModalProps {
@@ -223,6 +227,28 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
                   <strong>Academic Reference:</strong> {challenge.supportingReference}
                 </div>
               )}
+              {challenge.candidateAttachment && (
+                <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                  <div className="flex items-center space-x-1.5 truncate">
+                    {challenge.candidateAttachment.type.includes('image') ? (
+                      <ImageIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    ) : (
+                      <FileText className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    )}
+                    <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                      Candidate Proof: {challenge.candidateAttachment.name}
+                    </span>
+                  </div>
+                  <a
+                    href={challenge.candidateAttachment.dataUrl}
+                    download={challenge.candidateAttachment.name}
+                    className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-indigo-600 font-semibold text-[11px] flex items-center space-x-1"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>View / Download</span>
+                  </a>
+                </div>
+              )}
             </div>
 
             {/* Paper Setter's Recommendation Section (Since Paper Setter authored the question and selected key) */}
@@ -251,6 +277,21 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
                     "{challenge.setterReviewNotes}"
                   </p>
                 )}
+                {challenge.setterAttachment && (
+                  <div className="mt-1 pt-1.5 border-t border-indigo-100 dark:border-indigo-850 flex items-center justify-between text-xs">
+                    <span className="font-semibold text-indigo-900 dark:text-indigo-300 truncate">
+                      Setter Proof: {challenge.setterAttachment.name}
+                    </span>
+                    <a
+                      href={challenge.setterAttachment.dataUrl}
+                      download={challenge.setterAttachment.name}
+                      className="px-2 py-0.5 rounded bg-white dark:bg-slate-800 text-indigo-600 font-semibold text-[11px] flex items-center space-x-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download</span>
+                    </a>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-[11px] text-slate-400 italic">
@@ -278,6 +319,21 @@ export const AuthorizeChallengeModal: React.FC<AuthorizeChallengeModalProps> = (
                   <p className="text-slate-700 dark:text-slate-300 text-xs italic">
                     "{challenge.evaluatorReviewNotes}"
                   </p>
+                )}
+                {challenge.evaluatorAttachment && (
+                  <div className="mt-1 pt-1.5 border-t border-purple-100 dark:border-purple-850 flex items-center justify-between text-xs">
+                    <span className="font-semibold text-purple-900 dark:text-purple-300 truncate">
+                      Evaluator Reference: {challenge.evaluatorAttachment.name}
+                    </span>
+                    <a
+                      href={challenge.evaluatorAttachment.dataUrl}
+                      download={challenge.evaluatorAttachment.name}
+                      className="px-2 py-0.5 rounded bg-white dark:bg-slate-800 text-purple-600 font-semibold text-[11px] flex items-center space-x-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download</span>
+                    </a>
+                  </div>
                 )}
               </div>
             )}

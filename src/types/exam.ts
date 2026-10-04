@@ -80,6 +80,8 @@ export interface Exam {
   maxQuestionsToAttempt?: number; // e.g. candidate can appear in only 100 out of 110 questions
   instructions?: string;
   proctoringEnabled?: boolean;
+  negativeMarkingEnabled?: boolean;
+  negativeMarksPerQuestion?: number; // marks deducted per incorrect answer (e.g. 0.25, 0.33, 0.5, 1)
   
   // Live Schedule & Authorization Workflow
   scheduledStartTime?: string; // YYYY-MM-DDTHH:mm or ISO
@@ -152,11 +154,19 @@ export type ChallengeReason =
   | 'multiple_correct_options'
   | 'other';
 
+export interface ChallengeAttachment {
+  name: string;
+  type: string; // 'image/png' | 'image/jpeg' | 'application/pdf' | etc.
+  dataUrl: string; // Base64 data URL
+  size?: number;
+}
+
 export interface QuestionChallenge {
   id: string;
   examId: string;
   examTitle: string;
   submissionId: string;
+
   questionId: string;
   questionTitle: string;
   questionType?: string;
@@ -173,6 +183,7 @@ export interface QuestionChallenge {
   challengeReason: ChallengeReason;
   candidateExplanation: string;
   supportingReference?: string;
+  candidateAttachment?: ChallengeAttachment;
   submittedAt: string;
 
   status: ChallengeStatus;
@@ -183,6 +194,7 @@ export interface QuestionChallenge {
   setterDecision?: 'recommend_alter_key' | 'uphold_original' | 'recommend_skip_question';
   setterProposedAnswer?: string;
   setterReviewNotes?: string;
+  setterAttachment?: ChallengeAttachment;
   setterReviewedAt?: string;
 
   // Evaluator Review Stage
@@ -191,6 +203,7 @@ export interface QuestionChallenge {
   evaluatorDecision?: 'recommend_accept' | 'recommend_reject' | 'recommend_skip_question';
   evaluatorRecommendedMarks?: number;
   evaluatorReviewNotes?: string;
+  evaluatorAttachment?: ChallengeAttachment;
   evaluatorReviewedAt?: string;
 
   // Administrator Final Authorization Stage
